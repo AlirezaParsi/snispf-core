@@ -12,10 +12,12 @@ func IsRawAvailable() bool { return false }
 
 func (s *stub) Start() bool { return false }
 func (s *stub) Stop()       {}
-func (s *stub) RegisterPort(_ int, _ []byte) {
+func (s *stub) RegisterPort(_ int, _ []byte) bool {
+	return true
 }
 func (s *stub) WaitForConfirmation(_ int, _ time.Duration) bool { return false }
 func (s *stub) WaitForConfirmationDetailed(_ int, _ time.Duration) ConfirmationStatus {
 	return ConfirmationStatusNotRegistered
 }
 func (s *stub) CleanupPort(_ int) {}
+func (s *stub) SetInterfaceName(_ string) {}

@@ -7,7 +7,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"snispf/internal/logx"
 )
+
+// ValidLoadBalanceModes lists the canonical values accepted for LoadBalance.
+// Anything outside this set is normalised to "failover" and a warning is
+// emitted so typos surface in the startup log instead of silently degrading
+// to single-endpoint behaviour.
+var ValidLoadBalanceModes = []string{"failover", "round_robin", "random"}
 
 func NormalizeConfig(cfg *Config) {
 	if strings.TrimSpace(cfg.LogLevel) == "" {
@@ -16,10 +24,17 @@ func NormalizeConfig(cfg *Config) {
 		cfg.LogLevel = strings.ToLower(strings.TrimSpace(cfg.LogLevel))
 	}
 
-	if cfg.LoadBalance == "" {
-		cfg.LoadBalance = "round_robin"
+	rawLB := strings.ToLower(strings.TrimSpace(cfg.LoadBalance))
+	switch rawLB {
+	case "":
+		cfg.LoadBalance = "failover"
+	case "failover", "round_robin", "random":
+		cfg.LoadBalance = rawLB
+	default:
+		logx.Warnf("unknown load_balance mode %q; falling back to %q (valid: %s)", cfg.LoadBalance, "failover", strings.Join(ValidLoadBalanceModes, ", "))
+		cfg.LoadBalance = "failover"
 	}
-	if cfg.FailoverRetries <= 0 {
+	if cfg.AutoFailover && cfg.FailoverRetries <= 0 {
 		cfg.FailoverRetries = 2
 	}
 	if cfg.ProbeTimeoutMS <= 0 {

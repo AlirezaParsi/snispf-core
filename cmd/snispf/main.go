@@ -42,7 +42,6 @@ var defaultConfig = utils.Config{
 	FragmentDelay:            0.05,
 	UseTTLTrick:              false,
 	FakeSNIMethod:            "raw_inject",
-	LoadBalance:              "round_robin",
 	EndpointProbe:            false,
 	AutoFailover:             false,
 	FailoverRetries:          0,
@@ -100,9 +99,7 @@ func main() {
 		return
 	}
 
-	if *runCore {
-		// Internal compatibility flag used by service mode process spawning.
-	}
+	_ = runCore // accepted for compatibility with service-spawned children; no behavioural effect.
 
 	if *showInfo {
 		fmt.Print(banner)
@@ -452,6 +449,14 @@ func buildSingleRuntime(baseCfg utils.Config, noRaw bool, probeAlreadyDone bool,
 	var injector rawinjector.Interface
 	if len(endpoints) == 1 && !noRaw && (method == "fake_sni" || method == "combined" || method == "wrong_seq") && rawinjector.IsRawAvailable() {
 		injector = rawinjector.New(interfaceIP, endpoints[0].IP, endpoints[0].Port, tlsclienthello.BuildClientHello)
+		// If an explicit interface name is configured, pin the injector to it
+		// before starting. Critical for multi-WAN routers where route-based
+		// auto-detection may pick the wrong interface.
+		if ifName := strings.TrimSpace(cfg.Interface); ifName != "" {
+			if setter, ok := injector.(rawinjector.InterfaceNameSetter); ok {
+				setter.SetInterfaceName(ifName)
+			}
+		}
 		if !injector.Start() {
 			injector = nil
 			logx.Warnf("raw injector unavailable at runtime for %s, falling back", name)

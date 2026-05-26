@@ -45,9 +45,16 @@ Returns the service and worker process state.
   "log_path": "C:/Users/user/AppData/Roaming/snispf/logs/service.log",
   "config_path": "./config.json",
   "platform": "windows",
-  "architecture": "amd64"
+  "architecture": "amd64",
+  "raw_injection_available": true,
+  "raw_diagnostic": ""
 }
 ```
+
+| Field | Type | Description |
+|---|---|---|
+| `raw_injection_available` | boolean | True if elevated privileges and dependencies (like WinDivert or CAP_NET_RAW) are available for raw packet injection. |
+| `raw_diagnostic` | string | Troubleshooting context if `raw_injection_available` is false (e.g. WinDivert DLL load failure details). |
 
 ---
 

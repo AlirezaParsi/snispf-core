@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 ## [v0.1.6] - 2026-04-18
 
+## [v0.1.7] - 2026-05-26
+
+### Added
+- Raw injection availability diagnostics surfaced in status plus clearer Windows startup warnings.
+- Raw injector common helpers plus Linux drop stats and RX buffer tuning.
+- TLS ClientHello content-type guard in the fragmenter.
+
+### Changed
+- Non-strict strategies now use detailed confirmation logging.
+- Linux route selection caching and a retry on send failure to reduce transient errors.
+- Load-balancing config normalization and clearer warnings.
+
+### Fixed
+- OpenWRT wrong_seq confirmation timeout by sending fake packets via L3 raw socket with AF_PACKET fallback.
+- Promiscuous mode reset on Stop so restart re-applies properly.
+- RST gating to avoid cross-flow contamination on routers.
+- Constant-time token comparisons and EOF-tail log reads.
+
 ### Added
 - Core runtime now includes internal critical-failure recovery with automatic listener/runtime rebuild when repeated upstream confirmation failures cross a threshold.
 - Forwarder now exposes critical-failure escalation hooks to coordinate recovery across listener instances.

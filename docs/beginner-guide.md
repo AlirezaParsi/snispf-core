@@ -62,6 +62,7 @@ Open `config.json` and fill in your upstream details. The recommended default st
   "USE_TTL_TRICK": false,
   "FAKE_SNI_METHOD": "raw_inject",
   "WRONG_SEQ_CONFIRM_TIMEOUT_MS": 2000,
+  "INTERFACE": "",
   "ENDPOINTS": [
     {
       "NAME": "primary",
@@ -88,6 +89,7 @@ The only fields you need to change are `CONNECT_IP`, `FAKE_SNI`, and the matchin
 | `FAKE_SNI` | Hostname associated with the upstream endpoint |
 | `ENDPOINTS[0].IP` / `.SNI` | Must match `CONNECT_IP` / `FAKE_SNI` |
 | `LISTEN_PORT` | Any unused local port (40443 is a safe default) |
+| `INTERFACE` | Name of the network interface to bind raw packet injection to (e.g. `eth1`, `pppoe-wan`). Optional, leave empty for auto-detection. |
 
 > **Config precedence note:** When `ENDPOINTS` is defined, runtime dial values come from there rather than the top-level `CONNECT_IP`/`CONNECT_PORT`/`FAKE_SNI` fields. The top-level fields exist for backward compatibility. A warning is logged at startup when `ENDPOINTS[0]` overrides them.
 
@@ -247,15 +249,22 @@ Check `/v1/logs` or service logs for these outcome codes:
 | `not_registered` | Flow wasn't registered before dial — may indicate a race condition |
 | `first_write_fail` | First payload write failed after confirmation |
 
-### Raw injection isn't working on Linux
+### Raw injection isn't working on Linux / OpenWrt
 
-```bash
-# Check current capability
-.\snispf.exe --info
-
-# Grant capability without running as root
-sudo setcap cap_net_raw+ep ./snispf
-```
+1. Check current capability and diagnostic flags:
+   ```bash
+   .\snispf.exe --info
+   ```
+2. Grant capability without running as root:
+   ```bash
+   sudo setcap cap_net_raw+ep ./snispf
+   ```
+3. **WAN / Virtual Interface support**: The raw injector automatically uses an L3 raw IP socket, compatible with PPPoE, USB RNDIS (phone tethering), USB modems, VLANs, etc. If the injector is picking the wrong interface in multi-WAN setups, configure `"INTERFACE"` (e.g. `"pppoe-wan"`, `"eth1"`) to pin it.
+4. **Connection tracking (conntrack) dropping fake packets**: Strict netfilter conntrack settings might drop fake sequence packets as `INVALID`. To resolve this, run:
+   ```bash
+   sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1
+   ```
+   Ensure conntrack is not dropping out-of-order sequence packets.
 
 ---
 

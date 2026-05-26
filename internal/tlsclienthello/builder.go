@@ -41,7 +41,9 @@ func BuildSNIExtension(sni string) []byte {
 func BuildKeyShareExtension(publicKey []byte) []byte {
 	if len(publicKey) == 0 {
 		publicKey = make([]byte, 32)
-		_, _ = rand.Read(publicKey)
+		if _, err := rand.Read(publicKey); err != nil {
+			panic(err)
+		}
 	}
 	entry := make([]byte, 2+2+len(publicKey))
 	binary.BigEndian.PutUint16(entry[0:2], 0x001D)
@@ -77,11 +79,15 @@ func BuildClientHello(sni string) []byte {
 func BuildClientHelloFull(sni string, sessionID, randomBytes, keyShare []byte, targetSize int) []byte {
 	if len(sessionID) == 0 {
 		sessionID = make([]byte, 32)
-		_, _ = rand.Read(sessionID)
+		if _, err := rand.Read(sessionID); err != nil {
+			panic(err)
+		}
 	}
 	if len(randomBytes) == 0 {
 		randomBytes = make([]byte, 32)
-		_, _ = rand.Read(randomBytes)
+		if _, err := rand.Read(randomBytes); err != nil {
+			panic(err)
+		}
 	}
 
 	clientVersion := []byte{0x03, 0x03}
@@ -129,7 +135,9 @@ func BuildClientHelloFull(sni string, sessionID, randomBytes, keyShare []byte, t
 func BuildClientResponse(randomBytes []byte) []byte {
 	if len(randomBytes) == 0 {
 		randomBytes = make([]byte, 32)
-		_, _ = rand.Read(randomBytes)
+		if _, err := rand.Read(randomBytes); err != nil {
+			panic(err)
+		}
 	}
 	ccs := []byte{0x14, 0x03, 0x03, 0x00, 0x01, 0x01}
 	app := []byte{0x17, 0x03, 0x03, 0x00, 0x00}

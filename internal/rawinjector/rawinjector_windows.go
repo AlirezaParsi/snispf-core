@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"snispf/internal/logx"
 )
 
 const (
@@ -21,12 +23,11 @@ const (
 	winDivertFlagRecvOnly = 4
 	winDivertFlagSendOnly = 8
 
-	ipProtoTCP = 6
-	tcpFIN     = 0x01
-	tcpSYN     = 0x02
-	tcpRST     = 0x04
-	tcpPSH     = 0x08
-	tcpACK     = 0x10
+	tcpFIN = 0x01
+	tcpSYN = 0x02
+	tcpRST = 0x04
+	tcpPSH = 0x08
+	tcpACK = 0x10
 )
 
 type winDivertAddress [64]byte
@@ -45,12 +46,12 @@ type winPortState struct {
 }
 
 type winInjector struct {
-	localIP    [4]byte
+	localIPVal atomic.Uint32 // packed big-endian IPv4; 0 = unset
 	remoteIP   [4]byte
 	remotePort int
 
-	sniffHandle syscall.Handle
-	sendHandle  syscall.Handle
+	sniffHandle atomic.Uintptr
+	sendHandle  atomic.Uintptr
 
 	ports   map[int]*winPortState
 	portsMu sync.RWMutex
@@ -74,12 +75,52 @@ func New(localIP, remoteIP string, remotePort int, _ func(string) []byte) Interf
 		ports:      make(map[int]*winPortState),
 	}
 	if lip := net.ParseIP(localIP).To4(); lip != nil {
-		copy(out.localIP[:], lip)
+		out.localIPVal.Store(ipToUint32(lip))
 	}
 	if rip := net.ParseIP(remoteIP).To4(); rip != nil {
 		copy(out.remoteIP[:], rip)
 	}
 	return out
+}
+
+func ipToUint32(ip net.IP) uint32 {
+	if len(ip) < 4 {
+		return 0
+	}
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+func (i *winInjector) localIPBytes() [4]byte {
+	v := i.localIPVal.Load()
+	return [4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
+}
+
+// refreshLocalIP re-resolves the source IP used to reach the remote endpoint.
+// Returns true if the resolved address differs from what we had cached. Used
+// to keep the userspace localIP guard accurate across VPN toggle, DHCP renew,
+// or multi-WAN switches — the kernel filter is now broad enough not to need
+// reopening, so we just update the in-memory comparison value.
+func (i *winInjector) refreshLocalIP() bool {
+	if i.remoteIP == [4]byte{} {
+		return false
+	}
+	remote := net.IP(i.remoteIP[:]).String()
+	c, err := net.Dial("udp4", net.JoinHostPort(remote, "53"))
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	ua, ok := c.LocalAddr().(*net.UDPAddr)
+	if !ok || ua.IP == nil {
+		return false
+	}
+	lip := ua.IP.To4()
+	if lip == nil {
+		return false
+	}
+	newVal := ipToUint32(lip)
+	old := i.localIPVal.Swap(newVal)
+	return old != newVal
 }
 
 func IsRawAvailable() bool {
@@ -101,24 +142,33 @@ func IsRawAvailable() bool {
 }
 
 func (i *winInjector) Start() bool {
-	if i.sniffHandle != 0 && i.sendHandle != 0 {
+	if i.sniffHandle.Load() != 0 && i.sendHandle.Load() != 0 {
 		setRawDiagnostic("")
 		return true
 	}
-	if i.localIP == [4]byte{} || i.remoteIP == [4]byte{} {
-		setRawDiagnostic("invalid local/remote IPv4 for WinDivert injector")
+	if i.remoteIP == [4]byte{} {
+		setRawDiagnostic("invalid remote IPv4 for WinDivert injector")
 		return false
+	}
+	if i.localIPVal.Load() == 0 {
+		// Best-effort resolve via route; if it still fails we proceed (the
+		// userspace guard will simply allow more packets through to handlePacket
+		// until the next refresh succeeds).
+		i.refreshLocalIP()
 	}
 	if err := winDivertDLL.Load(); err != nil {
 		setRawDiagnostic(fmt.Sprintf("WinDivert load failed: %v", err))
 		return false
 	}
 
-	local := net.IP(i.localIP[:]).String()
 	remote := net.IP(i.remoteIP[:]).String()
+	// Broad filter: anything to/from the remote endpoint on the configured
+	// remote port. localIP is NOT in the kernel filter so the handle keeps
+	// capturing after a VPN/DHCP/multi-WAN local-IP change. handlePacket
+	// applies the userspace localIP guard (M8/M4) to discard cross-flow noise.
 	sniffFilter := fmt.Sprintf(
-		"tcp and ((ip.SrcAddr == %s and ip.DstAddr == %s and tcp.DstPort == %d) or (ip.SrcAddr == %s and ip.DstAddr == %s and tcp.SrcPort == %d))",
-		local, remote, i.remotePort, remote, local, i.remotePort,
+		"tcp and ((ip.SrcAddr == %s and tcp.SrcPort == %d) or (ip.DstAddr == %s and tcp.DstPort == %d))",
+		remote, i.remotePort, remote, i.remotePort,
 	)
 
 	sniff, err := winDivertOpenWithFallback(
@@ -138,38 +188,67 @@ func (i *winInjector) Start() bool {
 		setRawDiagnostic(fmt.Sprintf("WinDivert send open failed (admin/driver/version mismatch?): %v", err))
 		return false
 	}
-	i.sniffHandle = sniff
-	i.sendHandle = send
+	i.sniffHandle.Store(uintptr(sniff))
+	i.sendHandle.Store(uintptr(send))
 	i.running.Store(true)
 	setRawDiagnostic("")
 	i.wg.Add(1)
 	go i.sniffLoop()
+	i.wg.Add(1)
+	go i.localIPRefreshLoop()
 	return true
+}
+
+// localIPRefreshLoop periodically re-resolves the local source IP toward the
+// remote so the userspace filter stays accurate across network changes.
+// 5s cadence is a compromise: fast enough to catch a VPN toggle in practice,
+// slow enough that the per-tick UDP-dial cost is negligible.
+func (i *winInjector) localIPRefreshLoop() {
+	defer i.wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if !i.running.Load() {
+			return
+		}
+		<-ticker.C
+		if !i.running.Load() {
+			return
+		}
+		if i.refreshLocalIP() {
+			lip := i.localIPBytes()
+			logx.Infof("raw injector (windows): local IP refreshed to %d.%d.%d.%d", lip[0], lip[1], lip[2], lip[3])
+		}
+	}
 }
 
 func (i *winInjector) Stop() {
 	if !i.running.Swap(false) {
 		return
 	}
-	if i.sniffHandle != 0 {
-		_ = winDivertClose(i.sniffHandle)
-		i.sniffHandle = 0
+	sniff := i.sniffHandle.Swap(0)
+	if sniff != 0 {
+		_ = winDivertClose(syscall.Handle(sniff))
 	}
-	if i.sendHandle != 0 {
-		_ = winDivertClose(i.sendHandle)
-		i.sendHandle = 0
+	send := i.sendHandle.Swap(0)
+	if send != 0 {
+		_ = winDivertClose(syscall.Handle(send))
 	}
 	i.wg.Wait()
 }
 
-func (i *winInjector) RegisterPort(localPort int, fakeHello []byte) {
+func (i *winInjector) RegisterPort(localPort int, fakeHello []byte) bool {
 	i.portsMu.Lock()
 	defer i.portsMu.Unlock()
+	if _, exists := i.ports[localPort]; exists {
+		return false
+	}
 	i.ports[localPort] = &winPortState{
 		fakeHello:  append([]byte(nil), fakeHello...),
 		confirmedC: make(chan struct{}),
 		failedC:    make(chan struct{}),
 	}
+	return true
 }
 
 func (i *winInjector) WaitForConfirmation(localPort int, timeout time.Duration) bool {
@@ -211,6 +290,10 @@ func (i *winInjector) CleanupPort(localPort int) {
 	delete(i.ports, localPort)
 }
 
+// SetInterfaceName is a no-op on Windows. WinDivert captures at the network
+// layer and does not require interface-level pinning.
+func (i *winInjector) SetInterfaceName(_ string) {}
+
 func (i *winInjector) markFailed(ps *winPortState) {
 	ps.failOnce.Do(func() {
 		close(ps.failedC)
@@ -221,10 +304,14 @@ func (i *winInjector) sniffLoop() {
 	defer i.wg.Done()
 	buf := make([]byte, 65535)
 	for i.running.Load() {
+		h := i.sniffHandle.Load()
+		if h == 0 {
+			return
+		}
 		var readLen uint32
 		var addr winDivertAddress
 		r1, _, _ := procWinDivertRecv.Call(
-			uintptr(i.sniffHandle),
+			h,
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(len(buf)),
 			uintptr(unsafe.Pointer(&readLen)),
@@ -239,8 +326,9 @@ func (i *winInjector) sniffLoop() {
 		if int(readLen) > len(buf) {
 			continue
 		}
-		pkt := append([]byte(nil), buf[:readLen]...)
-		i.handlePacket(pkt, addr)
+		// No upfront copy: handlePacket retains bytes only when scheduling a
+		// fake-send, and that path already copies the template separately.
+		i.handlePacket(buf[:readLen], addr)
 	}
 }
 
@@ -268,8 +356,22 @@ func (i *winInjector) handlePacket(pkt []byte, addr winDivertAddress) {
 	srcPort := int(binary.BigEndian.Uint16(tcp[0:2]))
 	dstPort := int(binary.BigEndian.Uint16(tcp[2:4]))
 
-	outbound := equal4(srcIP, i.localIP[:]) && equal4(dstIP, i.remoteIP[:]) && dstPort == i.remotePort
-	inbound := equal4(srcIP, i.remoteIP[:]) && equal4(dstIP, i.localIP[:]) && srcPort == i.remotePort
+	localIP := i.localIPBytes()
+	outbound := equal4(dstIP, i.remoteIP[:]) && dstPort == i.remotePort
+	inbound := equal4(srcIP, i.remoteIP[:]) && srcPort == i.remotePort
+
+	// Userspace localIP guard (M4 + M8 equivalent on Windows). If we have a
+	// resolved local IP, packets that don't carry it on the right side are
+	// either cross-flow noise or pre-IP-change leftovers; drop them. If
+	// localIP is still unset, fall through to preserve behavior.
+	if localIP != [4]byte{} {
+		if outbound && !equal4(srcIP, localIP[:]) {
+			return
+		}
+		if inbound && !equal4(dstIP, localIP[:]) {
+			return
+		}
+	}
 
 	if outbound {
 		seq := binary.BigEndian.Uint32(tcp[4:8])
@@ -361,9 +463,13 @@ func (i *winInjector) handlePacket(pkt []byte, addr winDivertAddress) {
 }
 
 func (i *winInjector) injectPacket(packet []byte, addr winDivertAddress) error {
+	h := i.sendHandle.Load()
+	if h == 0 {
+		return syscall.EBADF
+	}
 	var writeLen uint32
 	r1, _, e := procWinDivertSend.Call(
-		uintptr(i.sendHandle),
+		h,
 		uintptr(unsafe.Pointer(&packet[0])),
 		uintptr(len(packet)),
 		uintptr(unsafe.Pointer(&writeLen)),
@@ -481,43 +587,4 @@ func buildFakePacket(template []byte, isn uint32, fakePayload []byte) ([]byte, e
 	binary.BigEndian.PutUint16(out[tcpOff+16:tcpOff+18], tcpChecksum(out[ipOff:ipOff+ihl], out[tcpOff:]))
 
 	return out, nil
-}
-
-func equal4(a, b []byte) bool {
-	return len(a) >= 4 && len(b) >= 4 && a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]
-}
-
-func ipHeaderLen(ip []byte) int {
-	return int(ip[0]&0x0f) * 4
-}
-
-func checksumFold(sum uint32) uint16 {
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
-}
-
-func sum16(data []byte) uint32 {
-	var sum uint32
-	for j := 0; j+1 < len(data); j += 2 {
-		sum += uint32(binary.BigEndian.Uint16(data[j : j+2]))
-	}
-	if len(data)%2 == 1 {
-		sum += uint32(data[len(data)-1]) << 8
-	}
-	return sum
-}
-
-func ipChecksum(iph []byte) uint16 {
-	return checksumFold(sum16(iph))
-}
-
-func tcpChecksum(iph []byte, tcpPayload []byte) uint16 {
-	pseudo := make([]byte, 12)
-	copy(pseudo[0:4], iph[12:16])
-	copy(pseudo[4:8], iph[16:20])
-	pseudo[9] = ipProtoTCP
-	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(tcpPayload)))
-	return checksumFold(sum16(pseudo) + sum16(tcpPayload))
 }

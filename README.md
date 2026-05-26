@@ -56,6 +56,8 @@ Keep all other client protocol settings unchanged.
 
 ## Recommended config
 
+`wrong_seq` default config should be minimal and single-endpoint. Do not enable multi-endpoint load balancing fields for `wrong_seq`.
+
 ```json
 {
   "LISTEN_HOST": "127.0.0.1",
@@ -70,20 +72,7 @@ Keep all other client protocol settings unchanged.
   "USE_TTL_TRICK": false,
   "FAKE_SNI_METHOD": "raw_inject",
   "WRONG_SEQ_CONFIRM_TIMEOUT_MS": 2000,
-  "ENDPOINTS": [
-    {
-      "NAME": "strict-primary",
-      "IP": "203.0.113.10",
-      "PORT": 443,
-      "SNI": "edge-a.example.com",
-      "ENABLED": true
-    }
-  ],
-  "LOAD_BALANCE": "failover",
-  "ENDPOINT_PROBE": true,
-  "AUTO_FAILOVER": false,
-  "FAILOVER_RETRIES": 0,
-  "PROBE_TIMEOUT_MS": 2500
+  "INTERFACE": ""
 }
 ```
 
@@ -98,6 +87,7 @@ Keep all other client protocol settings unchanged.
 | `USE_TTL_TRICK` | Send fake ClientHello with low TTL before the real one |
 | `FAKE_SNI_METHOD` | Fake SNI method: `raw_inject`, `prefix_fake`, etc. |
 | `WRONG_SEQ_CONFIRM_TIMEOUT_MS` | Confirmation window for `wrong_seq` mode (default 2000) |
+| `INTERFACE` | Network interface name to bind raw injection to (e.g. `eth1`, `pppoe-wan`). Empty for auto-detection. |
 | `LOAD_BALANCE` | Endpoint selection: `round_robin`, `random`, `failover` |
 | `ENDPOINT_PROBE` | Remove unreachable endpoints at startup |
 | `AUTO_FAILOVER` | Retry on dial failure |
@@ -136,6 +126,21 @@ Keep all other client protocol settings unchanged.
 - Exactly one enabled endpoint
 - SNI length ≤ 219 bytes
 - Generated fake ClientHello ≤ 1460 bytes (both validated by `--config-doctor`)
+
+If you need multi-endpoint balancing/failover, use `combined`, `fake_sni`, or `fragment` instead of `wrong_seq`.
+
+### Universal WAN Compatibility & Resiliency (wrong_seq)
+
+- **Universal WAN support (Linux / OpenWrt)**: SNISPF uses an L3 raw IP socket (`AF_INET SOCK_RAW IPPROTO_RAW` with `IP_HDRINCL=1`) for fake packet injection. This operates at the IP layer, letting the kernel handle routing, ARP/neighbor resolution, and link-layer encapsulation. It works out-of-the-box with **all** WAN technologies—including PPPoE, USB RNDIS (phone tethering), USB modems, VLANs, and Ethernet.
+  - Startup logs will show `send_method=ip_raw` when active, or `send_method=af_packet_fallback` as the original L2 fallback.
+  - In complex routing environments (e.g. multi-WAN, mwan3), you can explicitly bind raw injection to a specific WAN interface using the `"INTERFACE"` configuration field (e.g. `"eth1"`, `"pppoe-wan"`).
+- **Dynamic IP & VPN Resiliency (Windows)**: On Windows, SNISPF periodically re-resolves the active source IP toward the remote endpoint and uses userspace filtering. This allows the raw injector to dynamically adapt to dynamic DHCP changes, interface switches, and VPN toggles without dropping existing connections.
+- **Troubleshooting Router/Firewall Drops**: Routers or firewalls running strict connection tracking (conntrack) might classify the fake sequence packets as `INVALID` and drop them. 
+  - To prevent netfilter conntrack from dropping out-of-order window frames, enable the liberal mode:
+    ```bash
+    sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1
+    ```
+  - Ensure that firewall `OUTPUT` policies do not drop `INVALID` TCP packets without considering local raw injector injections.
 
 Run `.\snispf.exe --info` to inspect runtime capability flags. This flag is config-independent.
 

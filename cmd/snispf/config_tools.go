@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ func runConfigUI(cfg utils.Config) (utils.Config, error) {
 	cfg.UseTTLTrick = promptBool(r, "USE_TTL_TRICK", cfg.UseTTLTrick)
 	cfg.FakeSNIMethod = strings.ToLower(promptString(r, "FAKE_SNI_METHOD [prefix_fake|ttl_trick|disorder]", cfg.FakeSNIMethod))
 	cfg.WrongSeqConfirmTimeoutMS = promptInt(r, "WRONG_SEQ_CONFIRM_TIMEOUT_MS", cfg.WrongSeqConfirmTimeoutMS)
+	cfg.Interface = promptString(r, "INTERFACE (network interface name, empty=auto)", cfg.Interface)
 
 	return cfg, nil
 }
@@ -78,9 +80,12 @@ func runConfigDoctor(cfg utils.Config, caps utils.PlatformCapabilities) (issues 
 		issues = append(issues, "FRAGMENT_DELAY must be >= 0")
 	}
 
-	allowedLB := map[string]bool{"round_robin": true, "random": true, "failover": true}
+	allowedLB := map[string]bool{}
+	for _, m := range utils.ValidLoadBalanceModes {
+		allowedLB[m] = true
+	}
 	if cfg.LoadBalance != "" && !allowedLB[strings.ToLower(cfg.LoadBalance)] {
-		issues = append(issues, "LOAD_BALANCE must be one of round_robin, random, failover")
+		issues = append(issues, "LOAD_BALANCE must be one of "+strings.Join(utils.ValidLoadBalanceModes, ", "))
 	}
 
 	if cfg.FailoverRetries < 0 {
@@ -145,6 +150,12 @@ func runConfigDoctor(cfg utils.Config, caps utils.PlatformCapabilities) (issues 
 
 	if cfg.UseTTLTrick && !caps.IPTTLTrick {
 		warnings = append(warnings, "USE_TTL_TRICK enabled but platform capabilities indicate TTL trick may not work")
+	}
+
+	if ifName := strings.TrimSpace(cfg.Interface); ifName != "" {
+		if _, err := net.InterfaceByName(ifName); err != nil {
+			warnings = append(warnings, fmt.Sprintf("INTERFACE=%q not found on this system: %v", ifName, err))
+		}
 	}
 
 	return issues, warnings

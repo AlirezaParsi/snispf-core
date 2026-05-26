@@ -35,6 +35,7 @@ Strict raw-confirmed mode. The most effective bypass strategy when platform prer
   "USE_TTL_TRICK": false,
   "FAKE_SNI_METHOD": "raw_inject",
   "WRONG_SEQ_CONFIRM_TIMEOUT_MS": 2000,
+  "INTERFACE": "",
   "ENDPOINTS": [
     {
       "NAME": "strict-primary",
@@ -55,8 +56,9 @@ Strict raw-confirmed mode. The most effective bypass strategy when platform prer
 **Requirements:**
 - Exactly one enabled endpoint (`AUTO_FAILOVER: false`, `FAILOVER_RETRIES: 0` enforce this)
 - Windows: **Administrator terminal** + `WinDivert.dll` + `WinDivert64.sys` alongside the binary
-- Linux: `root` or `sudo setcap cap_net_raw+ep ./snispf`
+- Linux / OpenWrt: `root` or `sudo setcap cap_net_raw+ep ./snispf`
 - SNI ≤ 219 bytes; fake ClientHello ≤ 1460 bytes (both checked by `--config-doctor`)
+- **Universal WAN support**: Uses an L3 `AF_INET SOCK_RAW` socket for injecting fake sequence packets. This enables it to work automatically across PPPoE, USB tethering (RNDIS), USB modems, VLANs, and plain Ethernet with zero configuration. For complex routing, pin the injector using `"INTERFACE"`.
 
 **When to use:** Default for all platforms that meet the prerequisites above.
 

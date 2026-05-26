@@ -29,8 +29,17 @@ func (c *Combined) Name() string { return "combined" }
 
 func (c *Combined) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn, fakeSNI string, firstData []byte) bool {
 	if c.injector != nil {
-		if !c.injector.WaitForConfirmation(serverConn.LocalAddr().(*net.TCPAddr).Port, c.confirm) {
-			logx.Warnf("combined: no raw confirmation before timeout, continuing")
+		port := serverConn.LocalAddr().(*net.TCPAddr).Port
+		status := c.injector.WaitForConfirmationDetailed(port, c.confirm)
+		switch status {
+		case rawinjector.ConfirmationStatusConfirmed:
+			// happy path; nothing to log
+		case rawinjector.ConfirmationStatusFailed:
+			logx.Warnf("combined: raw confirmation reported failure port=%d, continuing with fragmentation", port)
+		case rawinjector.ConfirmationStatusTimeout:
+			logx.Warnf("combined: raw confirmation timed out port=%d timeout=%s, continuing with fragmentation", port, c.confirm)
+		case rawinjector.ConfirmationStatusNotRegistered:
+			logx.Warnf("combined: raw confirmation port not registered port=%d, continuing with fragmentation", port)
 		}
 	} else if c.useTTL {
 		fakeHello := tlsclienthello.BuildClientHello(fakeSNI)

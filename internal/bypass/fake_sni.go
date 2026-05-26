@@ -29,8 +29,17 @@ func (f *FakeSNI) Name() string { return "fake_sni" }
 
 func (f *FakeSNI) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn, fakeSNI string, firstData []byte) bool {
 	if f.injector != nil {
-		if !f.injector.WaitForConfirmation(serverConn.LocalAddr().(*net.TCPAddr).Port, f.confirm) {
-			logx.Warnf("fake_sni: no raw confirmation before timeout, sending real data")
+		port := serverConn.LocalAddr().(*net.TCPAddr).Port
+		status := f.injector.WaitForConfirmationDetailed(port, f.confirm)
+		switch status {
+		case rawinjector.ConfirmationStatusConfirmed:
+			// nothing to log; happy path
+		case rawinjector.ConfirmationStatusFailed:
+			logx.Warnf("fake_sni: raw confirmation reported failure (rst/build/inject error) port=%d, sending real data anyway", port)
+		case rawinjector.ConfirmationStatusTimeout:
+			logx.Warnf("fake_sni: raw confirmation timed out port=%d timeout=%s, sending real data", port, f.confirm)
+		case rawinjector.ConfirmationStatusNotRegistered:
+			logx.Warnf("fake_sni: raw confirmation port not registered port=%d (likely missing reservation), sending real data", port)
 		}
 		_, err := serverConn.Write(firstData)
 		return err == nil

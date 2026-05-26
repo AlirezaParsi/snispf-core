@@ -39,15 +39,17 @@ SNISPF has two top-level execution modes:
 3. Apply CLI flag overrides (`--listen`, `--connect`, `--sni`, `--method`)
 4. Validate port ranges
 5. Normalize config (`utils.NormalizeConfig`):
-   - Fill missing defaults
+   - Fill missing defaults (e.g. normalizing `LoadBalance` mode, default is `failover`)
    - Apply top-level defaults to each `LISTENERS[]` entry
    - Materialize endpoint list when absent
    - Resolve hostnames to IPs
    - Ensure `WRONG_SEQ_CONFIRM_TIMEOUT_MS` default (2000 ms)
+   - Parse optional `INTERFACE` binding
 6. Log precedence warnings when `ENDPOINTS[0]` overrides top-level fields
 7. Filter to enabled and valid endpoints (`utils.EnabledEndpoints`)
 8. Optional endpoint health probing (`utils.ProbeHealthyEndpoints`)
 9. Build raw injector (single endpoint, strategy-dependent, platform-dependent)
+   - If an explicit `INTERFACE` name is configured, invoke `SetInterfaceName` to pin the raw injector to that network interface.
 10. Build bypass strategy implementation
 11. Start forwarder server with cancellation context
 
@@ -122,7 +124,11 @@ Strict mode — mirrors the behavior of legacy strict bypass flows.
 
 ### Mechanism
 
-Opens an `AF_PACKET` raw socket bound to the network interface matching the configured local IP. Tracks per-source-port connection state in a `portState` map. Filters packet tracking by both upstream IP and upstream TCP port.
+- **Capture**: Opens an `AF_PACKET` raw socket bound to all non-loopback network interfaces (`ifindex=0`) in promiscuous mode (`PACKET_MR_PROMISC`) to capture inbound/outbound TCP traffic.
+- **Injection**: Prefers an L3 raw IP socket (`AF_INET SOCK_RAW IPPROTO_RAW` with `IP_HDRINCL=1`) for fake packet injection (logged as `send_method=ip_raw`). By injecting at the IP layer, the kernel handles routing (compatible with multi-WAN/mwan3), ARP/neighbor resolution, and valid L2 link-layer encapsulation. This ensures out-of-the-box compatibility with PPPoE, USB RNDIS (phone tethering), USB modems, VLANs, and Ethernet interfaces without zero-MAC drops.
+  - If a route interface cannot be resolved, it falls back to raw `AF_PACKET` L2 frame injection (`send_method=af_packet_fallback`).
+- **Interface Pinning**: The `"INTERFACE"` configuration field pins raw injection to a specific network interface (via `SetInterfaceName`), bypassing standard route-based interface auto-detection. This is essential for multi-WAN and OpenWRT routers.
+- **Buffer Drop Monitoring**: Runs a background `statsLoop` reading `PACKET_STATISTICS` via `getsockopt` every 30s. If the socket's receive buffer overflows, kernel drop counts (`tp_drops`) are logged.
 
 ### Per-connection state machine
 
@@ -133,9 +139,12 @@ For each registered local source port:
 | 1 | Outbound SYN | Record client ISN as `synSeq`, set `synSeen` |
 | 2 | Outbound ACK (`seq == synSeq+1`, ACK-only) | Capture packet as injection template |
 | 3 | — | Build fake frame: append fake ClientHello payload, set PSH flag, set `seq = synSeq + 1 - len(fake_payload)`, recompute IP/TCP checksums |
-| 4 | — | Inject frame via `AF_PACKET` |
+| 4 | — | Inject frame via L3 `ip_raw` socket (falls back to `af_packet_fallback`) |
 | 5 | Inbound ACK-only (`ACK == synSeq+1`) | Mark state `confirmed` |
 | 6 | Inbound RST | Mark state `failed` |
+
+- **Out-of-order ACK mismatch tolerance**: The first `outbound_ack_seq_mismatch` (e.g. duplicate ACK) is tolerated. A repeat mismatch marks the port `failed` immediately to trigger fast failover.
+- **Routing caching**: Route indexes are cached for 1s (`chooseSendIfindex`) and invalidated upon injection failure.
 
 ### Confirmation API
 
@@ -146,7 +155,9 @@ For each registered local source port:
 
 ## Raw injector — Windows (`internal/rawinjector/rawinjector_windows.go`)
 
-Uses WinDivert sniff and send handles with staged fallback filter chains. Per-source-port state tracking mirrors the Linux implementation. Injects crafted packets via the WinDivert send path. Emits diagnostics to help identify WinDivert load or runtime errors.
+- **Capture & Injection**: Opens WinDivert sniff and send handles using a broadened kernel filter that only targets the remote IP and port (omitting the local source IP).
+- **Dynamic IP & VPN Resiliency**: Runs a background loop every 5s (`localIPRefreshLoop`) to resolve the current active local IP toward the upstream endpoint. Userspace filtering checks captured packets against this refreshed source IP. This ensures the raw injector continues to work seamlessly across VPN toggles, DHCP switches, and interface changes.
+- **Staged Handle Closure**: Employs atomic `uintptr` stores for WinDivert handles to avoid races between `Stop()` and `sniffLoop`/`injectPacket` workers.
 
 Non-Linux/non-Windows platforms use `rawinjector_stub.go`, which returns `unavailable` for all operations.
 

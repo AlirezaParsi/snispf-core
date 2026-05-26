@@ -106,6 +106,15 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 	var selected utils.Endpoint
 	var registeredPort int
 	registered := false
+	// Defer cleanup of any still-registered port at function scope so a panic
+	// inside Strategy.Apply (or any other unexpected exit) doesn't leak the
+	// portState entry inside the raw injector.
+	defer func() {
+		if registered && s.Injector != nil {
+			s.Injector.CleanupPort(registeredPort)
+			registered = false
+		}
+	}()
 	var lastConnectErr error
 	var lastStrategyErr error
 	for attempt := 0; attempt < totalAttempts; attempt++ {
@@ -135,8 +144,30 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 		}
 
 		if s.Injector != nil {
-			reservedPort, reserveErr := reserveTCPPort(laddr)
-			if reserveErr != nil {
+			// Reserve a port and register it with the injector. If two
+			// goroutines race to the same ephemeral port (the kernel can
+			// hand the same value back briefly after release), RegisterPort
+			// returns false instead of clobbering an in-flight flow's
+			// confirmation state. Bounded retries (3) keep this from spinning
+			// under pathological churn.
+			const maxReserveRetries = 3
+			reserved := false
+			var reservedPort int
+			for r := 0; r < maxReserveRetries; r++ {
+				p, reserveErr := reserveTCPPort(laddr)
+				if reserveErr != nil {
+					break
+				}
+				if !s.Injector.RegisterPort(p, tlsclienthello.BuildClientHello(selected.SNI)) {
+					// Collision: another flow already owns this port. Try again.
+					continue
+				}
+				reservedPort = p
+				reserved = true
+				break
+			}
+			if !reserved {
+				logx.Warnf("port reservation failed after %d attempts endpoint=%s:%d", maxReserveRetries, selected.IP, selected.Port)
 				continue
 			}
 			if laddr == nil {
@@ -144,7 +175,6 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 			} else {
 				laddr = &net.TCPAddr{IP: laddr.IP, Port: reservedPort}
 			}
-			s.Injector.RegisterPort(reservedPort, tlsclienthello.BuildClientHello(selected.SNI))
 			registeredPort = reservedPort
 			registered = true
 		}
@@ -215,9 +245,6 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 	}
 	s.reportSuccess()
 	defer outgoing.Close()
-	if registered {
-		defer s.Injector.CleanupPort(registeredPort)
-	}
 	_ = outgoing.SetKeepAlive(true)
 	_ = outgoing.SetKeepAlivePeriod(60 * time.Second)
 	logx.Debugf("selected endpoint ip=%s port=%d sni=%s", selected.IP, selected.Port, selected.SNI)
@@ -277,12 +304,14 @@ func (s *Server) pickBaseIndex(total int) int {
 		return 0
 	}
 	switch s.LoadBalance {
+	case "", "failover":
+		return 0
+	case "round_robin":
+		return int(s.lbCounter.Add(1)-1) % total
 	case "random":
 		return rand.Intn(total)
-	case "failover":
-		return 0
 	default:
-		return int(s.lbCounter.Add(1)-1) % total
+		return 0
 	}
 }
 

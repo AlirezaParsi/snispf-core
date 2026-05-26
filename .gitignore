@@ -1,8 +1,14 @@
 # Build and release outputs
 /release/
+/dist/
+/snispf
+/snispf.exe
 
 # Local diagnostics and snapshots (can contain private network details)
-/openwrt_settings_*.txt
+/openwrt_settings*.txt
+/SNISPF - Cross-Platform DPI Bypass*.txt
+/Claude.md
+/implementation_plan.md
 
 # Runtime artifacts
 *.log

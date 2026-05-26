@@ -6,6 +6,11 @@ func FragmentClientHello(data []byte, strategy string) [][]byte {
 	if strategy == "none" || len(data) < 10 {
 		return [][]byte{data}
 	}
+	// Only fragment TLS handshake records (content-type 0x16). Anything else
+	// is non-TLS first bytes that shouldn't be sliced into bogus records.
+	if data[0] != 0x16 {
+		return [][]byte{data}
+	}
 	switch strategy {
 	case "sni_split":
 		return fragmentAtSNI(data)

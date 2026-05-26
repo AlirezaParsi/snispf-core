@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"snispf/internal/logx"
+	"snispf/internal/rawinjector"
 	"snispf/internal/utils"
 )
 
@@ -32,18 +34,21 @@ type controlService struct {
 	startedAt time.Time
 	lastError string
 	logPath   string
+	starting  bool
 }
 
 type serviceStatus struct {
-	APIVersion   string    `json:"api_version"`
-	Running      bool      `json:"running"`
-	PID          int       `json:"pid,omitempty"`
-	StartedAt    time.Time `json:"started_at,omitempty"`
-	LastError    string    `json:"last_error,omitempty"`
-	LogPath      string    `json:"log_path"`
-	ConfigPath   string    `json:"config_path"`
-	Platform     string    `json:"platform"`
-	Architecture string    `json:"architecture"`
+	APIVersion            string    `json:"api_version"`
+	Running               bool      `json:"running"`
+	PID                   int       `json:"pid,omitempty"`
+	StartedAt             time.Time `json:"started_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	LogPath               string    `json:"log_path"`
+	ConfigPath            string    `json:"config_path"`
+	Platform              string    `json:"platform"`
+	Architecture          string    `json:"architecture"`
+	RawInjectionAvailable bool      `json:"raw_injection_available"`
+	RawDiagnostic         string    `json:"raw_diagnostic,omitempty"`
 }
 
 type healthEndpoint struct {
@@ -78,6 +83,7 @@ func runControlService(cfgPath, addr, token string, parentPID int, parentStartUn
 	if err := ensureLogSink(logPath); err != nil {
 		return err
 	}
+	defer log.SetOutput(os.Stderr)
 
 	svc := &controlService{
 		cfgPath: cfgPath,
@@ -128,6 +134,13 @@ func runControlService(cfgPath, addr, token string, parentPID int, parentStartUn
 	if token != "" {
 		logx.Infof("control-service auth enabled")
 	}
+	if runtime.GOOS == "windows" && !rawinjector.IsRawAvailable() {
+		diag := rawinjector.RawDiagnostic()
+		if diag == "" {
+			diag = "WinDivert handle open failed"
+		}
+		logx.Warnf("control-service: running without WinDivert / admin privileges; wrong_seq and raw fake_sni will not be available (%s)", diag)
+	}
 
 	err = srv.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
@@ -168,7 +181,7 @@ func (s *controlService) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			if provided == "" {
 				provided = strings.TrimSpace(r.URL.Query().Get("token"))
 			}
-			if provided != s.token {
+			if subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
@@ -262,13 +275,9 @@ func (s *controlService) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *controlService) collectWrongSeqHealthStats(maxLines int) wrongSeqHealthStats {
 	stats := wrongSeqHealthStats{}
-	b, err := os.ReadFile(s.logPath)
+	lines, err := tailLines(s.logPath, maxLines)
 	if err != nil {
 		return stats
-	}
-	lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
 	}
 	stats.SourceLines = len(lines)
 
@@ -295,6 +304,61 @@ func (s *controlService) collectWrongSeqHealthStats(maxLines int) wrongSeqHealth
 	return stats
 }
 
+// tailLines returns up to maxLines lines from the end of path. It reads
+// backward in 64 KiB chunks until enough newlines are seen or the file is
+// exhausted, so it doesn't load the whole file into memory like os.ReadFile.
+// A maxLines <= 0 reads the whole file.
+func tailLines(path string, maxLines int) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := fi.Size()
+	if maxLines <= 0 {
+		b, rerr := io.ReadAll(f)
+		if rerr != nil {
+			return nil, rerr
+		}
+		return strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n"), nil
+	}
+
+	const chunk int64 = 64 * 1024
+	buf := make([]byte, 0, chunk)
+	tmp := make([]byte, chunk)
+	pos := size
+	newlines := 0
+	for pos > 0 {
+		readSize := chunk
+		if pos < readSize {
+			readSize = pos
+		}
+		pos -= readSize
+		if _, rerr := f.ReadAt(tmp[:readSize], pos); rerr != nil && rerr != io.EOF {
+			return nil, rerr
+		}
+		buf = append(tmp[:readSize:readSize], buf...)
+		newlines = 0
+		for _, c := range buf {
+			if c == '\n' {
+				newlines++
+			}
+		}
+		if newlines > maxLines {
+			break
+		}
+	}
+	lines := strings.Split(strings.ReplaceAll(string(buf), "\r\n", "\n"), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return lines, nil
+}
+
 func (s *controlService) handleValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -306,7 +370,7 @@ func (s *controlService) handleValidate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	utils.NormalizeConfig(&cfg)
-	caps := utils.CheckPlatformCapabilities(false)
+	caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
 	issues, warnings := runConfigDoctor(cfg, caps)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"api_version": apiVersion,
@@ -337,12 +401,20 @@ func (s *controlService) handleLogs(w http.ResponseWriter, r *http.Request) {
 		level = ""
 	}
 
-	b, err := os.ReadFile(s.logPath)
+	// When filtering by level, read more raw lines than the limit so the
+	// post-filter result still has a fighting chance to fill the cap.
+	readLimit := limit
+	if level != "" {
+		readLimit = limit * 4
+		if readLimit > 8000 {
+			readLimit = 8000
+		}
+	}
+	allLines, err := tailLines(s.logPath, readLimit)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]string{"logs": ""})
 		return
 	}
-	allLines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
 	lines := make([]string, 0, len(allLines))
 	for _, ln := range allLines {
 		if level == "" {
@@ -368,47 +440,64 @@ func (s *controlService) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *controlService) startCore() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	if s.starting {
+		s.mu.Unlock()
+		return fmt.Errorf("core start already in progress")
+	}
 	if s.child != nil && s.child.Process != nil {
 		if s.child.ProcessState == nil || !s.child.ProcessState.Exited() {
+			s.mu.Unlock()
 			return fmt.Errorf("core already running")
 		}
 	}
+	s.starting = true
+	cfgPath := s.cfgPath
+	exePath := s.exePath
+	logPath := s.logPath
+	s.mu.Unlock()
 
-	cfg, err := loadOrDefaultConfig(s.cfgPath)
+	defer func() {
+		s.mu.Lock()
+		s.starting = false
+		s.mu.Unlock()
+	}()
+
+	cfg, err := loadOrDefaultConfig(cfgPath)
 	if err != nil {
 		return err
 	}
 	utils.NormalizeConfig(&cfg)
-	caps := utils.CheckPlatformCapabilities(false)
+	caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
 	issues, _ := runConfigDoctor(cfg, caps)
 	if len(issues) > 0 {
 		return fmt.Errorf("config has %d issue(s); call /v1/validate", len(issues))
 	}
 
-	cmd := exec.Command(s.exePath, "--run-core", "--config", s.cfgPath)
+	cmd := exec.Command(exePath, "--run-core", "--config", cfgPath)
 	setHiddenProcessAttrs(cmd)
 
-	lf, err := os.OpenFile(s.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err == nil {
+	lf, lferr := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if lferr == nil {
 		cmd.Stdout = lf
 		cmd.Stderr = lf
-		s.childLog = lf
 	}
 
 	if err := cmd.Start(); err != nil {
-		if s.childLog != nil {
-			_ = s.childLog.Close()
-			s.childLog = nil
+		if lf != nil {
+			_ = lf.Close()
 		}
+		s.mu.Lock()
 		s.lastError = err.Error()
+		s.mu.Unlock()
 		return err
 	}
 
+	s.mu.Lock()
 	s.child = cmd
+	s.childLog = lf
 	s.startedAt = time.Now().UTC()
 	s.lastError = ""
+	s.mu.Unlock()
 
 	go func(c *exec.Cmd) {
 		err := c.Wait()
@@ -450,16 +539,20 @@ func (s *controlService) stopCore() error {
 }
 
 func (s *controlService) status() serviceStatus {
+	rawAvail := rawinjector.IsRawAvailable()
+	rawDiag := rawinjector.RawDiagnostic()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := serviceStatus{
-		APIVersion:   apiVersion,
-		Running:      false,
-		ConfigPath:   s.cfgPath,
-		LogPath:      s.logPath,
-		LastError:    s.lastError,
-		Platform:     runtime.GOOS,
-		Architecture: runtime.GOARCH,
+		APIVersion:            apiVersion,
+		Running:               false,
+		ConfigPath:            s.cfgPath,
+		LogPath:               s.logPath,
+		LastError:             s.lastError,
+		Platform:              runtime.GOOS,
+		Architecture:          runtime.GOARCH,
+		RawInjectionAvailable: rawAvail,
+		RawDiagnostic:         rawDiag,
 	}
 	if s.child != nil && s.child.Process != nil {
 		if s.child.ProcessState == nil || !s.child.ProcessState.Exited() {

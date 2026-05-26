@@ -29,6 +29,7 @@ type Config struct {
 	FailoverRetries          int        `json:"FAILOVER_RETRIES,omitempty"`
 	ProbeTimeoutMS           int        `json:"PROBE_TIMEOUT_MS,omitempty"`
 	WrongSeqConfirmTimeoutMS int        `json:"WRONG_SEQ_CONFIRM_TIMEOUT_MS,omitempty"`
+	Interface                string     `json:"INTERFACE,omitempty"`
 }
 
 type Listener struct {
