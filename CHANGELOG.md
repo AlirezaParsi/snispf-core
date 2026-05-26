@@ -2,8 +2,6 @@
 
 All notable changes to this project are documented in this file.
 
-## [v0.1.6] - 2026-04-18
-
 ## [v0.1.7] - 2026-05-26
 
 ### Added
@@ -21,6 +19,8 @@ All notable changes to this project are documented in this file.
 - Promiscuous mode reset on Stop so restart re-applies properly.
 - RST gating to avoid cross-flow contamination on routers.
 - Constant-time token comparisons and EOF-tail log reads.
+
+## [v0.1.6] - 2026-04-18
 
 ### Added
 - Core runtime now includes internal critical-failure recovery with automatic listener/runtime rebuild when repeated upstream confirmation failures cross a threshold.
