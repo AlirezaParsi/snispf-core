@@ -4,7 +4,7 @@ Terminal-first DPI bypass core for Go. Runs headless as a stable local TCP forwa
 
 Implements [@patterniha's SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) technique. All credit for the original method goes to [@patterniha](https://github.com/patterniha).
 
-Persian guide: `README_fa.md`
+Persian guide: [README_fa.md](README_fa.md)
 
 ---
 
