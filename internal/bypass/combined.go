@@ -7,7 +7,7 @@ import (
 
 	"snispf/internal/logx"
 	"snispf/internal/rawinjector"
-	"snispf/internal/tlsclienthello"
+	"snispf/internal/tlsutil"
 )
 
 type Combined struct {
@@ -42,7 +42,7 @@ func (c *Combined) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn,
 			logx.Warnf("combined: raw confirmation port not registered port=%d, continuing with fragmentation", port)
 		}
 	} else if c.useTTL {
-		fakeHello := tlsclienthello.BuildClientHello(fakeSNI)
+		fakeHello := tlsutil.BuildClientHello(fakeSNI)
 		originalTTL, ttlErr := getConnTTL(serverConn)
 		if ttlErr == nil {
 			if err := setConnTTL(serverConn, 3); err == nil {
@@ -60,7 +60,7 @@ func (c *Combined) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn,
 
 	_ = serverConn.SetNoDelay(true)
 	defer serverConn.SetNoDelay(false)
-	frags := tlsclienthello.FragmentClientHello(firstData, c.strategy)
+	frags := tlsutil.FragmentClientHello(firstData, c.strategy)
 	for i, frag := range frags {
 		if _, err := serverConn.Write(frag); err != nil {
 			return false

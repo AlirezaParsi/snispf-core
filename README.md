@@ -389,3 +389,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\integration_service_lifecycle
 | [`docs/internals.md`](docs/internals.md) | Architecture, code paths, contributing |
 | [`docs/examples.md`](docs/examples.md) | Annotated config profiles |
 | [`docs/roadmap.md`](docs/roadmap.md) | Planned direction and non-goals |
+
+---
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.

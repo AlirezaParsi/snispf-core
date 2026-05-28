@@ -1,4 +1,4 @@
-package utils
+package config
 
 import (
 	"crypto/tls"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"snispf/internal/logx"
+	"snispf/internal/netutil"
 )
 
 // ValidLoadBalanceModes lists the canonical values accepted for LoadBalance.
@@ -17,7 +18,8 @@ import (
 // to single-endpoint behaviour.
 var ValidLoadBalanceModes = []string{"failover", "round_robin", "random"}
 
-func NormalizeConfig(cfg *Config) {
+// Normalize applies defaults, resolves hosts, and fills in missing fields.
+func Normalize(cfg *Config) {
 	if strings.TrimSpace(cfg.LogLevel) == "" {
 		cfg.LogLevel = "info"
 	} else {
@@ -64,7 +66,7 @@ func NormalizeConfig(cfg *Config) {
 		if ls.BypassMethod == "" {
 			ls.BypassMethod = cfg.BypassMethod
 		}
-		ls.ConnectIP = ResolveHost(strings.TrimSpace(ls.ConnectIP))
+		ls.ConnectIP = netutil.ResolveHost(strings.TrimSpace(ls.ConnectIP))
 	}
 
 	if len(cfg.Listeners) > 0 {
@@ -96,7 +98,7 @@ func NormalizeConfig(cfg *Config) {
 		if ep.SNI == "" {
 			ep.SNI = cfg.FakeSNI
 		}
-		ep.IP = ResolveHost(strings.TrimSpace(ep.IP))
+		ep.IP = netutil.ResolveHost(strings.TrimSpace(ep.IP))
 	}
 
 	if len(cfg.Endpoints) > 0 {
@@ -110,6 +112,7 @@ func NormalizeConfig(cfg *Config) {
 	}
 }
 
+// EnabledEndpoints filters endpoints to those that are enabled and have valid fields.
 func EnabledEndpoints(endpoints []Endpoint) []Endpoint {
 	out := make([]Endpoint, 0, len(endpoints))
 	for _, ep := range endpoints {
@@ -124,6 +127,8 @@ func EnabledEndpoints(endpoints []Endpoint) []Endpoint {
 	return out
 }
 
+// ProbeHealthyEndpoints runs health probes on all endpoints concurrently
+// and returns only the healthy ones. Falls back to the full list if none pass.
 func ProbeHealthyEndpoints(endpoints []Endpoint, timeout time.Duration) []Endpoint {
 	if len(endpoints) <= 1 {
 		return endpoints
@@ -159,6 +164,7 @@ func ProbeHealthyEndpoints(endpoints []Endpoint, timeout time.Duration) []Endpoi
 	return healthy
 }
 
+// ProbeEndpoint tests connectivity to an endpoint via a TLS handshake.
 func ProbeEndpoint(ep Endpoint, timeout time.Duration) bool {
 	addr := net.JoinHostPort(ep.IP, strconv.Itoa(ep.Port))
 	dialer := &net.Dialer{Timeout: timeout}

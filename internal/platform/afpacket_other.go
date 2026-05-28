@@ -1,6 +1,6 @@
 //go:build !linux
 
-package utils
+package platform
 
 func hasAFPacketSupport() bool {
 	return false

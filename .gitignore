@@ -15,6 +15,7 @@
 *.pid
 
 # Local config variants
+config.json
 config.local.json
 config.override.json
 
@@ -23,3 +24,6 @@ config.override.json
 Thumbs.db
 .idea/
 .vscode/
+
+# Local research and comparison dirs
+/SNI-Spoofing-Go-main/

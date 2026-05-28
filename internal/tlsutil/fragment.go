@@ -1,4 +1,4 @@
-package tlsclienthello
+package tlsutil
 
 import "encoding/binary"
 
