@@ -1,4 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
+
 set -e
 
 # Colors
@@ -157,22 +158,7 @@ copy_script_to_install_dir() {
     fi
 }
 
-# Add alias for bash
-add_alias() {
-    if [ -f "$HOME/.bashrc" ]; then
-        if ! grep -q "alias $ALIAS_NAME=" "$HOME/.bashrc" 2>/dev/null; then
-            echo "" >> "$HOME/.bashrc"
-            echo "# SNISPF alias" >> "$HOME/.bashrc"
-            echo "alias $ALIAS_NAME='$SCRIPT_FILE'" >> "$HOME/.bashrc"
-            print_msg "Added alias to ~/.bashrc"
-            print_warn "Run: source ~/.bashrc (or restart Termux)"
-        else
-            print_warn "Alias already exists"
-        fi
-    fi
-}
-
-# Create standalone command
+# Create standalone command in PATH (no alias needed)
 create_standalone_command() {
     local bin_path="$PREFIX/bin/sni"
     
@@ -182,7 +168,7 @@ create_standalone_command() {
 exec $SCRIPT_FILE "\$@"
 EOF
         chmod +x "$bin_path"
-        print_msg "Command created: sni"
+        print_msg "Command 'sni' installed to $bin_path"
     fi
 }
 
@@ -205,17 +191,16 @@ install_snispf() {
 
     download_binary
     copy_script_to_install_dir
-    add_alias
     create_standalone_command
 
     print_msg "Installation complete!"
     echo ""
     print_info "Directory: $INSTALL_DIR"
     echo ""
-    print_msg "Usage:"
-    echo "  $ALIAS_NAME run          # Start proxy (foreground)"
-    echo "  $ALIAS_NAME stop         # Stop proxy"
-    echo "  $ALIAS_NAME status       # Check status"
+    print_msg "Usage (from anywhere):"
+    echo "  sni run          # Start proxy (foreground)"
+    echo "  sni stop         # Stop proxy"
+    echo "  sni status       # Check status"
 
     if [ "$root_mode" = "--root" ]; then
         echo ""
@@ -228,7 +213,7 @@ run_snispf() {
     check_termux
     
     if [ ! -f "$BINARY_FILE" ]; then
-        print_error "SNISPF not installed. Run: $ALIAS_NAME --install"
+        print_error "SNISPF not installed. Run: sni --install"
         exit 1
     fi
 
@@ -314,7 +299,7 @@ show_help() {
     cat << EOF
 SNISPF Core Manager for Termux
 
-Usage: $ALIAS_NAME [COMMAND]
+Usage: sni [COMMAND]
 
 Commands:
   --install              Install (normal mode)
@@ -325,11 +310,11 @@ Commands:
   --help                 Show help
 
 Examples:
-  $ALIAS_NAME --install          # Normal install
-  $ALIAS_NAME --install --root   # Root install
-  $ALIAS_NAME run                # Start proxy
-  $ALIAS_NAME stop               # Stop proxy
-  $ALIAS_NAME status             # Check status
+  sni --install          # Normal install
+  sni --install --root   # Root install
+  sni run                # Start proxy
+  sni stop               # Stop proxy
+  sni status             # Check status
 
 Notes:
   - Termux only (Android)
