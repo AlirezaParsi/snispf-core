@@ -1,4 +1,3 @@
-cat > ~/sni-spoof/sni.sh << 'EOF'
 #!/bin/bash
 
 # SNISPF Core Manager
@@ -36,6 +35,15 @@ detect_platform() {
     else
         PLATFORM="linux"
     fi
+}
+
+detect_shell() {
+    local current_shell=$(basename "$SHELL")
+    case "$current_shell" in
+        zsh) CURRENT_SHELL="zsh" ;;
+        fish) CURRENT_SHELL="fish" ;;
+        bash|*) CURRENT_SHELL="bash" ;;
+    esac
 }
 
 # Get current mode from config
@@ -132,9 +140,7 @@ download_binary() {
 copy_script_to_install_dir() {
     local script_path=""
     
-    if [ -f "$(pwd)/termux.sh" ]; then
-        script_path="$(pwd)/termux.sh"
-    elif [ -f "$(pwd)/sni.sh" ]; then
+    if [ -f "$(pwd)/sni.sh" ]; then
         script_path="$(pwd)/sni.sh"
     elif [ -f "$HOME/sni.sh" ]; then
         script_path="$HOME/sni.sh"
@@ -150,10 +156,81 @@ copy_script_to_install_dir() {
         cp "$script_path" "$SCRIPT_FILE"
         chmod +x "$SCRIPT_FILE"
         print_msg "Script copied to $SCRIPT_FILE"
+    else
+        cat > "$SCRIPT_FILE" << 'EOF'
+#!/bin/bash
+INSTALL_DIR="$HOME/sni-spoof"
+case "$1" in
+    run) cd "$INSTALL_DIR" && exec ./snispf --config ./config.json ;;
+    stop) pkill -f "snispf.*config.json" ;;
+    status) pgrep -f "snispf.*config.json" > /dev/null && echo "Running" || echo "Stopped" ;;
+    *) echo "Usage: sni {run|stop|status}" ;;
+esac
+EOF
+        chmod +x "$SCRIPT_FILE"
+        print_warn "Created wrapper script"
     fi
 }
 
-# Create standalone command
+# Add alias for bash, zsh, and fish
+add_shell_alias() {
+    local alias_cmd="alias $ALIAS_NAME='$SCRIPT_FILE'"
+    local fish_alias_cmd="alias $ALIAS_NAME='$SCRIPT_FILE'"
+    local added=0
+    
+    # For bash
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "alias $ALIAS_NAME=" "$HOME/.bashrc" 2>/dev/null; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# SNISPF alias" >> "$HOME/.bashrc"
+            echo "$alias_cmd" >> "$HOME/.bashrc"
+            print_msg "Added alias to ~/.bashrc"
+            added=1
+        fi
+    fi
+    
+    # For zsh
+    if [ -f "$HOME/.zshrc" ]; then
+        if ! grep -q "alias $ALIAS_NAME=" "$HOME/.zshrc" 2>/dev/null; then
+            echo "" >> "$HOME/.zshrc"
+            echo "# SNISPF alias" >> "$HOME/.zshrc"
+            echo "$alias_cmd" >> "$HOME/.zshrc"
+            print_msg "Added alias to ~/.zshrc"
+            added=1
+        fi
+    fi
+    
+    # For fish
+    if [ -d "$HOME/.config/fish" ]; then
+        local fish_config="$HOME/.config/fish/config.fish"
+        if [ -f "$fish_config" ]; then
+            if ! grep -q "alias $ALIAS_NAME=" "$fish_config" 2>/dev/null; then
+                echo "" >> "$fish_config"
+                echo "# SNISPF alias" >> "$fish_config"
+                echo "$fish_alias_cmd" >> "$fish_config"
+                print_msg "Added alias to ~/.config/fish/config.fish"
+                added=1
+            fi
+        fi
+    fi
+    
+    # For Termux
+    if [ "$PLATFORM" = "termux" ] && [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "alias $ALIAS_NAME=" "$HOME/.bashrc" 2>/dev/null; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# SNISPF alias" >> "$HOME/.bashrc"
+            echo "$alias_cmd" >> "$HOME/.bashrc"
+            print_msg "Added alias to ~/.bashrc (Termux)"
+            added=1
+        fi
+    fi
+    
+    if [ $added -eq 1 ]; then
+        print_warn "Run: source ~/.bashrc (or restart terminal)"
+    fi
+}
+
+# Create standalone command script in PATH
 create_standalone_command() {
     local bin_path=""
     
@@ -180,22 +257,24 @@ EOF
 
 # Install main function
 install_snispf() {
-    local use_root="$1"
+    local root_mode="$1"
     
     print_msg "Installing SNISPF..."
     detect_platform
+    detect_shell
     
-    if [ "$use_root" = "--root" ]; then
-        print_msg "Root mode installation (wrong_seq)"
+    if [ "$root_mode" = "--root" ]; then
+        print_msg "Root mode installation"
         create_config "wrong_seq"
     else
-        print_msg "Normal mode installation (combined - no root required)"
+        print_msg "Normal mode installation (no root)"
         create_config "combined"
     fi
     
     check_dependencies
     download_binary
     copy_script_to_install_dir
+    add_shell_alias
     create_standalone_command
     
     print_msg "Installation complete!"
@@ -208,12 +287,9 @@ install_snispf() {
     echo "  $ALIAS_NAME stop         # Stop proxy"
     echo "  $ALIAS_NAME status       # Check status"
     
-    if [ "$use_root" = "--root" ]; then
+    if [ "$root_mode" = "--root" ]; then
         echo ""
         print_warn "Root mode requires: sudo $ALIAS_NAME run"
-    else
-        echo ""
-        print_info "Proxy address: 127.0.0.1:40443"
     fi
 }
 
@@ -222,12 +298,13 @@ run_snispf() {
     detect_platform
     
     if [ ! -f "$BINARY_FILE" ]; then
-        print_error "SNISPF not installed. Run: sni --install"
+        print_error "SNISPF not installed. Run: $ALIAS_NAME --install"
         exit 1
     fi
     
     local mode=$(get_current_mode)
     
+    # Handle root mode
     if [ "$mode" = "wrong_seq" ]; then
         if [ "$EUID" -ne 0 ]; then
             if [ "$PLATFORM" = "termux" ]; then
@@ -240,6 +317,7 @@ run_snispf() {
         fi
     fi
     
+    # Check if already running
     if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
         print_error "SNISPF is already running (PID: $(cat $PID_FILE))"
         print_info "Run: $ALIAS_NAME stop"
@@ -249,6 +327,7 @@ run_snispf() {
     print_msg "Starting SNISPF..."
     cd "$INSTALL_DIR"
     
+    # Run in background and save PID
     nohup ./snispf --config "$CONFIG_FILE" > /dev/null 2>&1 &
     echo $! > "$PID_FILE"
     
@@ -305,20 +384,26 @@ SNISPF Core Manager
 Usage: $ALIAS_NAME [COMMAND]
 
 Commands:
-  --install              Install SNISPF (normal mode, no root)
-  --install --root       Install SNISPF with root mode (wrong_seq)
+  --install              Install SNISPF (normal mode)
+  --install --root       Install SNISPF with root mode support
   run                    Start the proxy
   stop                   Stop the proxy
   status                 Show proxy status
   --help                 Show this help
 
 Examples:
-  $ALIAS_NAME --install          # Install normal mode (combined)
-  $ALIAS_NAME --install --root   # Install root mode (wrong_seq)
+  $ALIAS_NAME --install          # Install normal mode
+  $ALIAS_NAME --install --root   # Install root mode
   $ALIAS_NAME run                # Start proxy
   sudo $ALIAS_NAME run           # Start proxy in root mode (Linux)
   $ALIAS_NAME stop               # Stop proxy
   $ALIAS_NAME status             # Check status
+
+Notes:
+  - After installation, you can use '$ALIAS_NAME' from anywhere
+  - Supports bash, zsh, and fish shells
+  - Config file: ~/sni-spoof/config.json
+  - Proxy address: 127.0.0.1:40443
 EOF
 }
 
@@ -349,4 +434,3 @@ case "$1" in
         fi
         ;;
 esac
-EOF
