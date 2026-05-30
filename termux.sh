@@ -11,7 +11,7 @@ NC='\033[0m'
 
 # Config
 INSTALL_DIR="$HOME/sni-spoof"
-BINARY_URL="https://github.com/NaxonM/snispf-core/releases/download/v0.1.7/snispf_linux_arm64"
+BINARY_URL="https://github.com/NaxonM/snispf-core/releases/download/v0.1.8/snispf_linux_arm64"
 CONFIG_FILE="$INSTALL_DIR/config.json"
 BINARY_FILE="$INSTALL_DIR/snispf"
 SCRIPT_FILE="$INSTALL_DIR/sni.sh"
