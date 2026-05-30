@@ -115,19 +115,49 @@ EOF
     print_msg "Config created"
 }
 
-# Download binary
+# Download binary with validation
 download_binary() {
     mkdir -p "$INSTALL_DIR"
 
     if [ -f "$BINARY_FILE" ]; then
-        print_warn "Binary already exists, skipping download"
-    else
-        print_msg "Downloading SNISPF binary..."
-        cd "$INSTALL_DIR"
-        curl -L --progress-bar "$BINARY_URL" -o "$BINARY_FILE"
-        chmod +x "$BINARY_FILE"
-        print_msg "Download complete"
+        # Check if existing binary is valid
+        if file "$BINARY_FILE" | grep -q "ELF.*executable"; then
+            print_warn "Valid binary already exists, skipping download"
+            return 0
+        else
+            print_warn "Existing binary is corrupted, re-downloading..."
+            rm -f "$BINARY_FILE"
+        fi
     fi
+    
+    print_msg "Downloading SNISPF binary..."
+    cd "$INSTALL_DIR"
+    
+    # Download with retry
+    local max_retries=3
+    local retry=0
+    
+    while [ $retry -lt $max_retries ]; do
+        if curl -L --fail --progress-bar "$BINARY_URL" -o "$BINARY_FILE.tmp"; then
+            # Verify the downloaded file
+            if file "$BINARY_FILE.tmp" | grep -q "ELF.*executable"; then
+                mv "$BINARY_FILE.tmp" "$BINARY_FILE"
+                chmod +x "$BINARY_FILE"
+                print_msg "Download complete"
+                return 0
+            else
+                print_warn "Downloaded file is not a valid executable (attempt $((retry+1))/$max_retries)"
+                rm -f "$BINARY_FILE.tmp"
+            fi
+        else
+            print_warn "Download failed (attempt $((retry+1))/$max_retries)"
+        fi
+        retry=$((retry + 1))
+        [ $retry -lt $max_retries ] && sleep 2
+    done
+    
+    print_error "Failed to download valid binary after $max_retries attempts"
+    exit 1
 }
 
 # Self-copy script to install directory
@@ -218,11 +248,7 @@ update_snispf() {
         rm -f "$BINARY_FILE"
     fi
     
-    print_msg "Downloading latest binary..."
-    mkdir -p "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    curl -L --progress-bar "$BINARY_URL" -o "$BINARY_FILE"
-    chmod +x "$BINARY_FILE"
+    download_binary
     print_msg "Update completed!"
 }
 
@@ -232,6 +258,12 @@ run_snispf() {
     
     if [ ! -f "$BINARY_FILE" ]; then
         print_error "SNISPF not installed. Run: sni --install"
+        exit 1
+    fi
+    
+    # Verify binary before running
+    if ! file "$BINARY_FILE" | grep -q "ELF.*executable"; then
+        print_error "Binary is corrupted. Please run: sni update"
         exit 1
     fi
 
