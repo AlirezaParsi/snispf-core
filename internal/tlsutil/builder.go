@@ -1,4 +1,4 @@
-package tlsclienthello
+package tlsutil
 
 import (
 	"crypto/rand"

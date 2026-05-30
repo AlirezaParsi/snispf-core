@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"snispf/internal/tlsclienthello"
+	"snispf/internal/tlsutil"
 )
 
 type Fragment struct {
@@ -22,7 +22,7 @@ func (f *Fragment) Name() string { return "fragment" }
 func (f *Fragment) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn, _ string, firstData []byte) bool {
 	_ = serverConn.SetNoDelay(true)
 	defer serverConn.SetNoDelay(false)
-	frags := tlsclienthello.FragmentClientHello(firstData, f.strategy)
+	frags := tlsutil.FragmentClientHello(firstData, f.strategy)
 	for i, frag := range frags {
 		if _, err := serverConn.Write(frag); err != nil {
 			return false

@@ -21,12 +21,14 @@ SNISPF has two top-level execution modes:
 | Path | Responsibility |
 |---|---|
 | `cmd/snispf/main.go` | Bootstrap, CLI parsing, config loading, strategy wiring, runtime startup |
-| `cmd/snispf/service_api.go` | HTTP control API (`/v1/*`) and worker process lifecycle |
+| `internal/service/` | HTTP control API (`/v1/*`) and worker process lifecycle |
 | `internal/forwarder/server.go` | TCP listener and per-connection forwarding loop |
 | `internal/bypass/` | Strategy implementations (`fragment`, `fake_sni`, `combined`, `wrong_seq`) |
 | `internal/rawinjector/` | Raw packet monitor and injector (Linux, Windows, and stub) |
-| `internal/tlsclienthello/` | ClientHello parsing, building, and fragmentation |
-| `internal/utils/` | Config schema, normalization, endpoint probing, capability checks |
+| `internal/tlsutil/` | ClientHello parsing, building, and fragmentation |
+| `internal/config/` | Config schema, defaults, loading, validation, and CLI doctor |
+| `internal/netutil/` | Low-level network utilities |
+| `internal/platform/` | OS capability detection and platform features |
 
 ---
 
@@ -38,7 +40,7 @@ SNISPF has two top-level execution modes:
 2. Load config JSON (or generate defaults)
 3. Apply CLI flag overrides (`--listen`, `--connect`, `--sni`, `--method`)
 4. Validate port ranges
-5. Normalize config (`utils.NormalizeConfig`):
+5. Normalize config (`config.Normalize`):
    - Fill missing defaults (e.g. normalizing `LoadBalance` mode, default is `failover`)
    - Apply top-level defaults to each `LISTENERS[]` entry
    - Materialize endpoint list when absent
@@ -46,8 +48,8 @@ SNISPF has two top-level execution modes:
    - Ensure `WRONG_SEQ_CONFIRM_TIMEOUT_MS` default (2000 ms)
    - Parse optional `INTERFACE` binding
 6. Log precedence warnings when `ENDPOINTS[0]` overrides top-level fields
-7. Filter to enabled and valid endpoints (`utils.EnabledEndpoints`)
-8. Optional endpoint health probing (`utils.ProbeHealthyEndpoints`)
+7. Filter to enabled and valid endpoints (`config.EnabledEndpoints`)
+8. Optional endpoint health probing (`config.ProbeHealthyEndpoints`)
 9. Build raw injector (single endpoint, strategy-dependent, platform-dependent)
    - If an explicit `INTERFACE` name is configured, invoke `SetInterfaceName` to pin the raw injector to that network interface.
 10. Build bypass strategy implementation
@@ -87,7 +89,7 @@ All strategies implement the `internal/bypass/Strategy` interface. The forwarder
 
 Pure stream-level strategy — no raw socket required.
 
-- Fragments the TLS ClientHello using `tlsclienthello.FragmentClientHello` according to the configured split strategy
+- Fragments the TLS ClientHello using `tlsutil.FragmentClientHello` according to the configured split strategy
 - Writes fragments with configurable inter-fragment delay
 - Works unprivileged on all platforms
 
@@ -163,7 +165,7 @@ Non-Linux/non-Windows platforms use `rawinjector_stub.go`, which returns `unavai
 
 ---
 
-## Service API internals (`cmd/snispf/service_api.go`)
+## Service API internals (`internal/service/`)
 
 The service controller manages a child worker process launched as:
 
@@ -192,7 +194,7 @@ The service controller and the core worker are separate processes with no shared
 
 ---
 
-## Endpoint management (`internal/utils/endpoints.go`)
+## Endpoint management (`internal/config/normalize.go`)
 
 - Endpoints can be defined explicitly with per-endpoint SNI overrides
 - `ENDPOINT_PROBE` removes unreachable endpoints at startup

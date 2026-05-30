@@ -4,7 +4,7 @@ Terminal-first DPI bypass core for Go. Runs headless as a stable local TCP forwa
 
 Implements [@patterniha's SNI-Spoofing](https://github.com/patterniha/SNI-Spoofing) technique. All credit for the original method goes to [@patterniha](https://github.com/patterniha).
 
-Persian guide: `README_fa.md`
+Persian guide: [README_fa.md](README_fa.md)
 
 ---
 
@@ -389,3 +389,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\integration_service_lifecycle
 | [`docs/internals.md`](docs/internals.md) | Architecture, code paths, contributing |
 | [`docs/examples.md`](docs/examples.md) | Annotated config profiles |
 | [`docs/roadmap.md`](docs/roadmap.md) | Planned direction and non-goals |
+
+---
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.

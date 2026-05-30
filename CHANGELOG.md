@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [v0.1.8] - 2026-05-29
+
+### Fixed
+- GitHub Release workflow to publish `WinDivert.dll` and `WinDivert64.sys` as standalone release assets, resolving downstream dependency build errors (e.g. in SNI-Finder).
+
 ## [v0.1.7] - 2026-05-26
 
 ### Added

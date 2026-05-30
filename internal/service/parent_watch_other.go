@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package service
 
 func parentProcessAlive(pid int, expectedStartUnixMS int64) bool {
 	_ = pid

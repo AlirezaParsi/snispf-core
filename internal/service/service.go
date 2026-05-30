@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"context"
@@ -19,22 +19,25 @@ import (
 	"sync"
 	"time"
 
+	"snispf/internal/config"
 	"snispf/internal/logx"
+	"snispf/internal/netutil"
+	"snispf/internal/platform"
 	"snispf/internal/rawinjector"
-	"snispf/internal/utils"
 )
 
 type controlService struct {
-	mu        sync.Mutex
-	cfgPath   string
-	token     string
-	exePath   string
-	child     *exec.Cmd
-	childLog  *os.File
-	startedAt time.Time
-	lastError string
-	logPath   string
-	starting  bool
+	mu         sync.Mutex
+	cfgPath    string
+	token      string
+	exePath    string
+	child      *exec.Cmd
+	childLog   *os.File
+	startedAt  time.Time
+	lastError  string
+	logPath    string
+	starting   bool
+	apiVersion string
 }
 
 type serviceStatus struct {
@@ -70,7 +73,8 @@ type wrongSeqHealthStats struct {
 	SourceLines    int `json:"source_lines"`
 }
 
-func runControlService(cfgPath, addr, token string, parentPID int, parentStartUnixMS int64) error {
+// Run starts the HTTP control service that manages the proxy core process.
+func Run(cfgPath, addr, token string, parentPID int, parentStartUnixMS int64, apiVersion string) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return err
@@ -86,10 +90,11 @@ func runControlService(cfgPath, addr, token string, parentPID int, parentStartUn
 	defer log.SetOutput(os.Stderr)
 
 	svc := &controlService{
-		cfgPath: cfgPath,
-		token:   token,
-		exePath: exePath,
-		logPath: logPath,
+		cfgPath:    cfgPath,
+		token:      token,
+		exePath:    exePath,
+		logPath:    logPath,
+		apiVersion: apiVersion,
 	}
 
 	mux := http.NewServeMux()
@@ -227,18 +232,18 @@ func (s *controlService) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	cfg, err := loadOrDefaultConfig(s.cfgPath)
+	cfg, err := config.LoadOrDefault(s.cfgPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	utils.NormalizeConfig(&cfg)
-	active := utils.EnabledEndpoints(cfg.Endpoints)
+	config.Normalize(&cfg)
+	active := config.EnabledEndpoints(cfg.Endpoints)
 	if len(cfg.Listeners) > 0 {
-		active = make([]utils.Endpoint, 0, len(cfg.Listeners))
+		active = make([]config.Endpoint, 0, len(cfg.Listeners))
 		for _, ls := range cfg.Listeners {
-			resolvedIP := utils.ResolveHost(ls.ConnectIP)
-			active = append(active, utils.Endpoint{
+			resolvedIP := netutil.ResolveHost(ls.ConnectIP)
+			active = append(active, config.Endpoint{
 				Name:    ls.Name,
 				IP:      resolvedIP,
 				Port:    ls.ConnectPort,
@@ -250,7 +255,7 @@ func (s *controlService) handleHealth(w http.ResponseWriter, r *http.Request) {
 	timeout := time.Duration(cfg.ProbeTimeoutMS) * time.Millisecond
 	out := make([]healthEndpoint, 0, len(active))
 	for _, ep := range active {
-		healthy, latency, probeErr := probeEndpoint(ep, timeout)
+		healthy, latency, probeErr := probeTCPEndpoint(ep, timeout)
 		errText := ""
 		if probeErr != nil {
 			errText = probeErr.Error()
@@ -266,7 +271,7 @@ func (s *controlService) handleHealth(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_version": apiVersion,
+		"api_version": s.apiVersion,
 		"checked_at":  time.Now().UTC(),
 		"endpoints":   out,
 		"wrong_seq":   s.collectWrongSeqHealthStats(5000),
@@ -364,16 +369,16 @@ func (s *controlService) handleValidate(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	cfg, err := loadOrDefaultConfig(s.cfgPath)
+	cfg, err := config.LoadOrDefault(s.cfgPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	utils.NormalizeConfig(&cfg)
-	caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
-	issues, warnings := runConfigDoctor(cfg, caps)
+	config.Normalize(&cfg)
+	caps := platform.CheckCapabilities(rawinjector.IsRawAvailable())
+	issues, warnings := config.RunDoctor(cfg, caps)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_version": apiVersion,
+		"api_version": s.apiVersion,
 		"issues":      issues,
 		"warnings":    warnings,
 	})
@@ -430,7 +435,7 @@ func (s *controlService) handleLogs(w http.ResponseWriter, r *http.Request) {
 		lines = lines[len(lines)-limit:]
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_version":    apiVersion,
+		"api_version":    s.apiVersion,
 		"logs":           strings.Join(lines, "\n"),
 		"returned_lines": len(lines),
 		"limit":          limit,
@@ -462,13 +467,13 @@ func (s *controlService) startCore() error {
 		s.mu.Unlock()
 	}()
 
-	cfg, err := loadOrDefaultConfig(cfgPath)
+	cfg, err := config.LoadOrDefault(cfgPath)
 	if err != nil {
 		return err
 	}
-	utils.NormalizeConfig(&cfg)
-	caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
-	issues, _ := runConfigDoctor(cfg, caps)
+	config.Normalize(&cfg)
+	caps := platform.CheckCapabilities(rawinjector.IsRawAvailable())
+	issues, _ := config.RunDoctor(cfg, caps)
 	if len(issues) > 0 {
 		return fmt.Errorf("config has %d issue(s); call /v1/validate", len(issues))
 	}
@@ -544,7 +549,7 @@ func (s *controlService) status() serviceStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := serviceStatus{
-		APIVersion:            apiVersion,
+		APIVersion:            s.apiVersion,
 		Running:               false,
 		ConfigPath:            s.cfgPath,
 		LogPath:               s.logPath,
@@ -570,7 +575,8 @@ func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func probeEndpoint(ep utils.Endpoint, timeout time.Duration) (bool, time.Duration, error) {
+// probeTCPEndpoint tests connectivity via a plain TCP dial (not TLS).
+func probeTCPEndpoint(ep config.Endpoint, timeout time.Duration) (bool, time.Duration, error) {
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ep.IP, ep.Port), timeout)
 	if err != nil {

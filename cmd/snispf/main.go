@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,11 +14,14 @@ import (
 
 	"runtime"
 	"snispf/internal/bypass"
+	"snispf/internal/config"
 	"snispf/internal/forwarder"
 	"snispf/internal/logx"
+	"snispf/internal/netutil"
+	"snispf/internal/platform"
 	"snispf/internal/rawinjector"
-	"snispf/internal/tlsclienthello"
-	"snispf/internal/utils"
+	"snispf/internal/service"
+	"snispf/internal/tlsutil"
 )
 
 const version = "1.1.0-go"
@@ -29,25 +31,6 @@ const banner = `
  SNISPF - Cross-Platform DPI Bypass Tool
  SNI Spoofing + TLS Fragmentation
 `
-
-var defaultConfig = utils.Config{
-	ListenHost:               "0.0.0.0",
-	ListenPort:               40443,
-	LogLevel:                 "info",
-	ConnectIP:                "104.19.229.21",
-	ConnectPort:              443,
-	FakeSNI:                  "hcaptcha.com",
-	BypassMethod:             "wrong_seq",
-	FragmentStrategy:         "sni_split",
-	FragmentDelay:            0.05,
-	UseTTLTrick:              false,
-	FakeSNIMethod:            "raw_inject",
-	EndpointProbe:            false,
-	AutoFailover:             false,
-	FailoverRetries:          0,
-	ProbeTimeoutMS:           2500,
-	WrongSeqConfirmTimeoutMS: 2000,
-}
 
 func main() {
 	os.Args = append([]string{os.Args[0]}, normalizeCLIArgs(os.Args[1:])...)
@@ -103,7 +86,7 @@ func main() {
 
 	if *showInfo {
 		fmt.Print(banner)
-		caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
+		caps := platform.CheckCapabilities(rawinjector.IsRawAvailable())
 		fmt.Printf("platform=%s\n", caps.Platform)
 		fmt.Printf("fragment_support=%v\n", caps.Fragment)
 		fmt.Printf("tls_record_frag=%v\n", caps.TLSRecordFrag)
@@ -126,31 +109,31 @@ func main() {
 	}
 
 	if *serviceMode {
-		cfgForLogs, _ := loadOrDefaultConfig(cfgPath)
-		utils.NormalizeConfig(&cfgForLogs)
+		cfgForLogs, _ := config.LoadOrDefault(cfgPath)
+		config.Normalize(&cfgForLogs)
 		configureLogger(cfgForLogs.LogLevel, *quiet || *quietShort, *verbose || *verboseShort)
 
 		tok := strings.TrimSpace(*serviceToken)
 		if tok == "" {
 			tok = strings.TrimSpace(os.Getenv("SNISPF_SERVICE_TOKEN"))
 		}
-		if err := runControlService(cfgPath, *serviceAddr, tok, *serviceParentPID, *serviceParentTS); err != nil {
+		if err := service.Run(cfgPath, *serviceAddr, tok, *serviceParentPID, *serviceParentTS, apiVersion); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
 	if *generateConfig != "" {
-		if err := writeConfig(*generateConfig, defaultConfig); err != nil {
+		if err := config.Write(*generateConfig, config.DefaultConfig); err != nil {
 			log.Fatalf("failed to write config: %v", err)
 		}
 		fmt.Println("Generated config:", *generateConfig)
 		return
 	}
 
-	cfg := defaultConfig
+	cfg := config.DefaultConfig
 	if cfgPath != "" {
-		loaded, err := loadConfig(cfgPath)
+		loaded, err := config.Load(cfgPath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -158,14 +141,14 @@ func main() {
 	}
 
 	if v := firstNonEmpty(*listen, *listenShort); v != "" {
-		host, port, err := utils.ParseHostPort(v, "0.0.0.0", 40443)
+		host, port, err := netutil.ParseHostPort(v, "0.0.0.0", 40443)
 		if err != nil {
 			log.Fatal(err)
 		}
 		cfg.ListenHost, cfg.ListenPort = host, port
 	}
 	if v := firstNonEmpty(*connect, *connectShort); v != "" {
-		host, port, err := utils.ParseHostPort(v, "188.114.98.0", 443)
+		host, port, err := netutil.ParseHostPort(v, "188.114.98.0", 443)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -187,19 +170,19 @@ func main() {
 		cfg.UseTTLTrick = true
 	}
 
-	if !utils.IsValidPort(cfg.ListenPort) || !utils.IsValidPort(cfg.ConnectPort) {
+	if !netutil.IsValidPort(cfg.ListenPort) || !netutil.IsValidPort(cfg.ConnectPort) {
 		log.Fatal("invalid listen/connect port")
 	}
 
 	cfgBeforeNormalize := cfg
-	utils.NormalizeConfig(&cfg)
-	precedenceWarnings := configPrecedenceWarnings(cfgBeforeNormalize)
-	activeEndpoints := utils.EnabledEndpoints(cfg.Endpoints)
+	config.Normalize(&cfg)
+	precedenceWarnings := config.PrecedenceWarnings(cfgBeforeNormalize)
+	activeEndpoints := config.EnabledEndpoints(cfg.Endpoints)
 	if len(activeEndpoints) == 0 {
 		log.Fatal("no valid enabled endpoints in config")
 	}
 	if cfg.EndpointProbe {
-		activeEndpoints = utils.ProbeHealthyEndpoints(
+		activeEndpoints = config.ProbeHealthyEndpoints(
 			activeEndpoints,
 			time.Duration(cfg.ProbeTimeoutMS)*time.Millisecond,
 		)
@@ -211,13 +194,13 @@ func main() {
 		cfg.BypassMethod = "fragment"
 	}
 
-	if err := validateSNIGuardrails(cfg); err != nil {
+	if err := config.ValidateSNIGuardrails(cfg); err != nil {
 		log.Fatal(err)
 	}
 
 	if *configDoctor {
-		caps := utils.CheckPlatformCapabilities(rawinjector.IsRawAvailable())
-		issues, warnings := runConfigDoctor(cfg, caps)
+		caps := platform.CheckCapabilities(rawinjector.IsRawAvailable())
+		issues, warnings := config.RunDoctor(cfg, caps)
 		if len(issues) == 0 {
 			fmt.Println("config-doctor: OK")
 		} else {
@@ -337,40 +320,7 @@ func main() {
 	}
 }
 
-func configPrecedenceWarnings(cfg utils.Config) []string {
-	if len(cfg.Listeners) > 0 || len(cfg.Endpoints) == 0 {
-		return nil
-	}
-
-	first := cfg.Endpoints[0]
-	warnings := make([]string, 0, 3)
-
-	cfgIP := strings.TrimSpace(utils.ResolveHost(cfg.ConnectIP))
-	epIP := strings.TrimSpace(utils.ResolveHost(first.IP))
-	if cfgIP != "" && epIP != "" && cfgIP != epIP {
-		warnings = append(warnings,
-			fmt.Sprintf("config precedence: ENDPOINTS[0].IP=%q overrides CONNECT_IP=%q", first.IP, cfg.ConnectIP),
-		)
-	}
-
-	if cfg.ConnectPort > 0 && first.Port > 0 && cfg.ConnectPort != first.Port {
-		warnings = append(warnings,
-			fmt.Sprintf("config precedence: ENDPOINTS[0].PORT=%d overrides CONNECT_PORT=%d", first.Port, cfg.ConnectPort),
-		)
-	}
-
-	cfgSNI := strings.TrimSpace(cfg.FakeSNI)
-	epSNI := strings.TrimSpace(first.SNI)
-	if cfgSNI != "" && epSNI != "" && !strings.EqualFold(cfgSNI, epSNI) {
-		warnings = append(warnings,
-			fmt.Sprintf("config precedence: ENDPOINTS[0].SNI=%q overrides FAKE_SNI=%q", first.SNI, cfg.FakeSNI),
-		)
-	}
-
-	return warnings
-}
-
-func buildStrategy(cfg utils.Config, method string, injector rawinjector.Interface) bypass.Strategy {
+func buildStrategy(cfg config.Config, method string, injector rawinjector.Interface) bypass.Strategy {
 	switch strings.ToLower(method) {
 	case "fake_sni":
 		return bypass.NewFakeSNI(cfg.FakeSNIMethod, cfg.FragmentDelay, time.Duration(cfg.WrongSeqConfirmTimeoutMS)*time.Millisecond, injector)
@@ -385,12 +335,12 @@ func buildStrategy(cfg utils.Config, method string, injector rawinjector.Interfa
 
 type serverRuntime struct {
 	name     string
-	cfg      utils.Config
+	cfg      config.Config
 	server   *forwarder.Server
 	injector rawinjector.Interface
 }
 
-func buildServerRuntimes(cfg utils.Config, noRaw bool, onCritical func(reason string)) ([]serverRuntime, error) {
+func buildServerRuntimes(cfg config.Config, noRaw bool, onCritical func(reason string)) ([]serverRuntime, error) {
 	if len(cfg.Listeners) == 0 {
 		// Endpoints are already probed at the top level; skip inner probe.
 		rt, err := buildSingleRuntime(cfg, noRaw, true, "primary", cfg.ListenHost, cfg.ListenPort, cfg.Endpoints, cfg.BypassMethod, onCritical)
@@ -406,9 +356,9 @@ func buildServerRuntimes(cfg utils.Config, noRaw bool, onCritical func(reason st
 		if strings.TrimSpace(name) == "" {
 			name = fmt.Sprintf("listener-%d", i+1)
 		}
-		endpoints := []utils.Endpoint{{
+		endpoints := []config.Endpoint{{
 			Name:    name + "-upstream",
-			IP:      utils.ResolveHost(ls.ConnectIP),
+			IP:      netutil.ResolveHost(ls.ConnectIP),
 			Port:    ls.ConnectPort,
 			SNI:     ls.FakeSNI,
 			Enabled: true,
@@ -427,7 +377,7 @@ func buildServerRuntimes(cfg utils.Config, noRaw bool, onCritical func(reason st
 	return runtimes, nil
 }
 
-func buildSingleRuntime(baseCfg utils.Config, noRaw bool, probeAlreadyDone bool, name, listenHost string, listenPort int, endpoints []utils.Endpoint, method string, onCritical func(reason string)) (serverRuntime, error) {
+func buildSingleRuntime(baseCfg config.Config, noRaw bool, probeAlreadyDone bool, name, listenHost string, listenPort int, endpoints []config.Endpoint, method string, onCritical func(reason string)) (serverRuntime, error) {
 	cfg := baseCfg
 	method = strings.ToLower(strings.TrimSpace(method))
 	if method == "" {
@@ -439,16 +389,16 @@ func buildSingleRuntime(baseCfg utils.Config, noRaw bool, probeAlreadyDone bool,
 	}
 
 	if cfg.EndpointProbe && !probeAlreadyDone {
-		endpoints = utils.ProbeHealthyEndpoints(endpoints, time.Duration(cfg.ProbeTimeoutMS)*time.Millisecond)
+		endpoints = config.ProbeHealthyEndpoints(endpoints, time.Duration(cfg.ProbeTimeoutMS)*time.Millisecond)
 	}
 	if len(endpoints) == 0 {
 		return serverRuntime{}, fmt.Errorf("%s has no available endpoint", name)
 	}
 
-	interfaceIP := utils.GetDefaultInterfaceIPv4(endpoints[0].IP)
+	interfaceIP := netutil.GetDefaultInterfaceIPv4(endpoints[0].IP)
 	var injector rawinjector.Interface
 	if len(endpoints) == 1 && !noRaw && (method == "fake_sni" || method == "combined" || method == "wrong_seq") && rawinjector.IsRawAvailable() {
-		injector = rawinjector.New(interfaceIP, endpoints[0].IP, endpoints[0].Port, tlsclienthello.BuildClientHello)
+		injector = rawinjector.New(interfaceIP, endpoints[0].IP, endpoints[0].Port, tlsutil.BuildClientHello)
 		// If an explicit interface name is configured, pin the injector to it
 		// before starting. Critical for multi-WAN routers where route-based
 		// auto-detection may pick the wrong interface.
@@ -509,33 +459,6 @@ func buildSingleRuntime(baseCfg utils.Config, noRaw bool, probeAlreadyDone bool,
 	return serverRuntime{name: name, cfg: cfg, server: srv, injector: injector}, nil
 }
 
-func validateSNIGuardrails(cfg utils.Config) error {
-	check := func(scope, sni string) error {
-		if len([]byte(sni)) > maxSNIBytes {
-			return fmt.Errorf("%s SNI must be <= %d bytes", scope, maxSNIBytes)
-		}
-		n := len(tlsclienthello.BuildClientHello(sni))
-		if n > maxFakeHelloBytes {
-			return fmt.Errorf("%s fake ClientHello size is %d bytes (> %d)", scope, n, maxFakeHelloBytes)
-		}
-		return nil
-	}
-	if err := check("FAKE_SNI", cfg.FakeSNI); err != nil {
-		return err
-	}
-	for i, ep := range cfg.Endpoints {
-		if err := check(fmt.Sprintf("ENDPOINTS[%d].SNI", i), ep.SNI); err != nil {
-			return err
-		}
-	}
-	for i, ls := range cfg.Listeners {
-		if err := check(fmt.Sprintf("LISTENERS[%d].FAKE_SNI", i), ls.FakeSNI); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -545,38 +468,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func loadConfig(path string) (utils.Config, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return utils.Config{}, fmt.Errorf("failed to read config: %w", err)
-	}
-	cfg := defaultConfig
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return utils.Config{}, fmt.Errorf("invalid config JSON: %w", err)
-	}
-	return cfg, nil
-}
-
-func writeConfig(path string, cfg utils.Config) error {
-	b, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o644)
-}
-
-func loadOrDefaultConfig(path string) (utils.Config, error) {
-	_, statErr := os.Stat(path)
-	if statErr == nil {
-		return loadConfig(path)
-	}
-	if os.IsNotExist(statErr) {
-		return defaultConfig, nil
-	}
-	return utils.Config{}, statErr
-}
-
-func printPrivilegeGuidance(caps utils.PlatformCapabilities) {
+func printPrivilegeGuidance(caps platform.Capabilities) {
 	if caps.RawInjection {
 		fmt.Println("privilege-note: elevated privileges detected for raw injection mode")
 		return
@@ -587,7 +479,7 @@ func printPrivilegeGuidance(caps utils.PlatformCapabilities) {
 	}
 }
 
-func printRuntimeModeHint(cfg utils.Config, rawActive bool) {
+func printRuntimeModeHint(cfg config.Config, rawActive bool) {
 	if rawActive {
 		logx.Infof("runtime: raw injection active")
 		return

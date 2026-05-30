@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"snispf/internal/bypass"
+	"snispf/internal/config"
 	"snispf/internal/logx"
+	"snispf/internal/netutil"
 	"snispf/internal/rawinjector"
-	"snispf/internal/tlsclienthello"
-	"snispf/internal/utils"
+	"snispf/internal/tlsutil"
 )
 
 type Server struct {
@@ -25,7 +26,7 @@ type Server struct {
 	ConnectIP        string
 	ConnectPort      int
 	FakeSNI          string
-	Endpoints        []utils.Endpoint
+	Endpoints        []config.Endpoint
 	LoadBalance      string
 	AutoFailover     bool
 	FailoverRetries  int
@@ -81,7 +82,7 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 	first = first[:n]
 	_ = incoming.SetReadDeadline(time.Time{})
 
-	parsed := tlsclienthello.ParseClientHello(first)
+	parsed := tlsutil.ParseClientHello(first)
 	logx.Debugf("incoming sni=%v bypass=%s", parsed["sni"], s.Strategy.Name())
 	requestSNI, _ := parsed["sni"].(string)
 
@@ -103,7 +104,7 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 	totalAttempts := retries + 1
 
 	var outgoing *net.TCPConn
-	var selected utils.Endpoint
+	var selected config.Endpoint
 	var registeredPort int
 	registered := false
 	// Defer cleanup of any still-registered port at function scope so a panic
@@ -127,7 +128,7 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 			continue
 		}
 
-		dynamicIP := utils.GetDefaultInterfaceIPv4(selected.IP)
+		dynamicIP := netutil.GetDefaultInterfaceIPv4(selected.IP)
 		bindIP := s.InterfaceIP
 		if s.Injector == nil && strings.TrimSpace(dynamicIP) != "" {
 			// In non-raw modes, pick source IP per selected upstream endpoint
@@ -158,7 +159,7 @@ func (s *Server) handleConn(ctx context.Context, incoming *net.TCPConn) {
 				if reserveErr != nil {
 					break
 				}
-				if !s.Injector.RegisterPort(p, tlsclienthello.BuildClientHello(selected.SNI)) {
+				if !s.Injector.RegisterPort(p, tlsutil.BuildClientHello(selected.SNI)) {
 					// Collision: another flow already owns this port. Try again.
 					continue
 				}
@@ -292,11 +293,11 @@ func (s *Server) reportFailure(reason string) {
 	s.OnCriticalError(reason)
 }
 
-func (s *Server) endpointsOrDefault() []utils.Endpoint {
+func (s *Server) endpointsOrDefault() []config.Endpoint {
 	if len(s.Endpoints) > 0 {
 		return s.Endpoints
 	}
-	return []utils.Endpoint{{IP: s.ConnectIP, Port: s.ConnectPort, SNI: s.FakeSNI, Enabled: true}}
+	return []config.Endpoint{{IP: s.ConnectIP, Port: s.ConnectPort, SNI: s.FakeSNI, Enabled: true}}
 }
 
 func (s *Server) pickBaseIndex(total int) int {

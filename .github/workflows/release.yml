@@ -168,6 +168,8 @@ jobs:
           files: |
             dist/publish/snispf_windows_amd64.exe
             dist/publish/snispf_windows_amd64_bundle.zip
+            dist/publish/WinDivert.dll
+            dist/publish/WinDivert64.sys
             dist/publish/snispf_linux_amd64
             dist/publish/snispf_linux_amd64_bundle.tar.gz
             dist/publish/snispf_linux_arm64

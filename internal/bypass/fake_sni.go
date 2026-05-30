@@ -8,7 +8,7 @@ import (
 
 	"snispf/internal/logx"
 	"snispf/internal/rawinjector"
-	"snispf/internal/tlsclienthello"
+	"snispf/internal/tlsutil"
 )
 
 type FakeSNI struct {
@@ -55,7 +55,7 @@ func (f *FakeSNI) Apply(_ context.Context, _ net.Conn, serverConn *net.TCPConn, 
 	_ = fakeSNI
 	_ = serverConn.SetNoDelay(true)
 	defer serverConn.SetNoDelay(false)
-	frags := tlsclienthello.FragmentClientHello(firstData, "sni_split")
+	frags := tlsutil.FragmentClientHello(firstData, "sni_split")
 	for i, frag := range frags {
 		if _, err := serverConn.Write(frag); err != nil {
 			return false
@@ -71,7 +71,7 @@ func (f *FakeSNI) applyTTLTrick(serverConn *net.TCPConn, fakeSNI string, firstDa
 	_ = serverConn.SetNoDelay(true)
 	defer serverConn.SetNoDelay(false)
 
-	fakeHello := tlsclienthello.BuildClientHello(fakeSNI)
+	fakeHello := tlsutil.BuildClientHello(fakeSNI)
 	originalTTL, ttlErr := getConnTTL(serverConn)
 	if ttlErr == nil {
 		if err := setConnTTL(serverConn, 3); err != nil {
