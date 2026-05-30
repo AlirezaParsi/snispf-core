@@ -1,5 +1,4 @@
 #!/data/data/com.termux/files/usr/bin/bash
-
 set -e
 
 # Colors
@@ -158,7 +157,22 @@ copy_script_to_install_dir() {
     fi
 }
 
-# Create standalone command in PATH (no alias needed)
+# Add alias for bash
+add_alias() {
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "alias $ALIAS_NAME=" "$HOME/.bashrc" 2>/dev/null; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# SNISPF alias" >> "$HOME/.bashrc"
+            echo "alias $ALIAS_NAME='$SCRIPT_FILE'" >> "$HOME/.bashrc"
+            print_msg "Added alias to ~/.bashrc"
+            print_warn "Run: source ~/.bashrc (or restart Termux)"
+        else
+            print_warn "Alias already exists"
+        fi
+    fi
+}
+
+# Create standalone command
 create_standalone_command() {
     local bin_path="$PREFIX/bin/sni"
     
@@ -168,7 +182,7 @@ create_standalone_command() {
 exec $SCRIPT_FILE "\$@"
 EOF
         chmod +x "$bin_path"
-        print_msg "Command 'sni' installed to $bin_path"
+        print_msg "Command created: sni"
     fi
 }
 
@@ -191,16 +205,18 @@ install_snispf() {
 
     download_binary
     copy_script_to_install_dir
+    add_alias
     create_standalone_command
 
     print_msg "Installation complete!"
     echo ""
     print_info "Directory: $INSTALL_DIR"
     echo ""
-    print_msg "Usage (from anywhere):"
-    echo "  sni run          # Start proxy (foreground)"
-    echo "  sni stop         # Stop proxy"
-    echo "  sni status       # Check status"
+    print_msg "Usage:"
+    echo "  $ALIAS_NAME run          # Start proxy (foreground)"
+    echo "  $ALIAS_NAME stop         # Stop proxy"
+    echo "  $ALIAS_NAME status       # Check status"
+    echo "  $ALIAS_NAME update       # Update binary"
 
     if [ "$root_mode" = "--root" ]; then
         echo ""
@@ -208,12 +224,31 @@ install_snispf() {
     fi
 }
 
+# Update binary
+update_snispf() {
+    print_msg "Updating SNISPF binary..."
+    check_termux
+    check_curl
+    
+    if [ -f "$BINARY_FILE" ]; then
+        print_msg "Removing old binary..."
+        rm -f "$BINARY_FILE"
+    fi
+    
+    print_msg "Downloading latest binary..."
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    curl -L --progress-bar "$BINARY_URL" -o "$BINARY_FILE"
+    chmod +x "$BINARY_FILE"
+    print_msg "Update completed!"
+}
+
 # Run the proxy
 run_snispf() {
     check_termux
     
     if [ ! -f "$BINARY_FILE" ]; then
-        print_error "SNISPF not installed. Run: sni --install"
+        print_error "SNISPF not installed. Run: $ALIAS_NAME --install"
         exit 1
     fi
 
@@ -240,27 +275,25 @@ stop_snispf() {
     print_msg "Stopping SNISPF..."
     
     if [ "$mode" = "wrong_seq" ]; then
-        sudo killall snispf 2>/dev/null
-        
-        while true; do
-            local pid=$(sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
-            if [ -z "$pid" ]; then
-                print_msg "Stopped"
-                return 0
-            fi
-            sleep 0.5
-        done
+        local pids=$(sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                sudo kill -9 "$pid" 2>/dev/null
+            done
+            print_msg "Stopped"
+        else
+            print_warn "No running process found"
+        fi
     else
-        killall snispf 2>/dev/null
-        
-        while true; do
-            local pid=$(ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
-            if [ -z "$pid" ]; then
-                print_msg "Stopped"
-                return 0
-            fi
-            sleep 0.5
-        done
+        local pids=$(ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                kill -9 "$pid" 2>/dev/null
+            done
+            print_msg "Stopped"
+        else
+            print_warn "No running process found"
+        fi
     fi
 }
 
@@ -299,7 +332,7 @@ show_help() {
     cat << EOF
 SNISPF Core Manager for Termux
 
-Usage: sni [COMMAND]
+Usage: $ALIAS_NAME [COMMAND]
 
 Commands:
   --install              Install (normal mode)
@@ -307,14 +340,16 @@ Commands:
   run                    Start proxy (foreground)
   stop                   Stop proxy
   status                 Show status
+  update                 Update binary
   --help                 Show help
 
 Examples:
-  sni --install          # Normal install
-  sni --install --root   # Root install
-  sni run                # Start proxy
-  sni stop               # Stop proxy
-  sni status             # Check status
+  $ALIAS_NAME --install          # Normal install
+  $ALIAS_NAME --install --root   # Root install
+  $ALIAS_NAME run                # Start proxy
+  $ALIAS_NAME stop               # Stop proxy
+  $ALIAS_NAME status             # Check status
+  $ALIAS_NAME update             # Update to latest binary
 
 Notes:
   - Termux only (Android)
@@ -328,6 +363,9 @@ EOF
 case "$1" in
     --install)
         install_snispf "$2"
+        ;;
+    update)
+        update_snispf
         ;;
     run)
         run_snispf
