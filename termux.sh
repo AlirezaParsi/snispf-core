@@ -38,12 +38,27 @@ get_current_mode() {
     fi
 }
 
-# Check and install curl if not present
-check_curl() {
+# Check and install dependencies
+check_dependencies() {
+    # Install curl if not present
     if ! command -v curl &> /dev/null; then
         print_warn "curl not found. Installing..."
         pkg update && pkg install -y curl
         print_msg "curl installed"
+    fi
+    
+    # Install file if not present
+    if ! command -v file &> /dev/null; then
+        print_warn "file not found. Installing..."
+        pkg install -y file
+        print_msg "file installed"
+    fi
+    
+    # Install grep if not present (usually pre-installed, but just in case)
+    if ! command -v grep &> /dev/null; then
+        print_warn "grep not found. Installing..."
+        pkg install -y grep
+        print_msg "grep installed"
     fi
 }
 
@@ -120,8 +135,8 @@ download_binary() {
     mkdir -p "$INSTALL_DIR"
 
     if [ -f "$BINARY_FILE" ]; then
-        # Check if existing binary is valid
-        if file "$BINARY_FILE" | grep -q "ELF.*executable"; then
+        # Check if existing binary is valid using file command
+        if file "$BINARY_FILE" 2>/dev/null | grep -q "ELF.*executable"; then
             print_warn "Valid binary already exists, skipping download"
             return 0
         else
@@ -138,9 +153,9 @@ download_binary() {
     local retry=0
     
     while [ $retry -lt $max_retries ]; do
-        if curl -L --fail --progress-bar "$BINARY_URL" -o "$BINARY_FILE.tmp"; then
+        if curl -L --fail --progress-bar "$BINARY_URL" -o "$BINARY_FILE.tmp" 2>/dev/null; then
             # Verify the downloaded file
-            if file "$BINARY_FILE.tmp" | grep -q "ELF.*executable"; then
+            if file "$BINARY_FILE.tmp" 2>/dev/null | grep -q "ELF.*executable"; then
                 mv "$BINARY_FILE.tmp" "$BINARY_FILE"
                 chmod +x "$BINARY_FILE"
                 print_msg "Download complete"
@@ -206,7 +221,7 @@ install_snispf() {
 
     print_msg "Installing SNISPF for Termux..."
     check_termux
-    check_curl
+    check_dependencies
 
     if [ "$root_mode" = "--root" ]; then
         print_msg "Root mode installation"
@@ -241,7 +256,7 @@ install_snispf() {
 update_snispf() {
     print_msg "Updating SNISPF binary..."
     check_termux
-    check_curl
+    check_dependencies
     
     if [ -f "$BINARY_FILE" ]; then
         print_msg "Removing old binary..."
@@ -262,7 +277,7 @@ run_snispf() {
     fi
     
     # Verify binary before running
-    if ! file "$BINARY_FILE" | grep -q "ELF.*executable"; then
+    if ! file "$BINARY_FILE" 2>/dev/null | grep -q "ELF.*executable"; then
         print_error "Binary is corrupted. Please run: sni update"
         exit 1
     fi
