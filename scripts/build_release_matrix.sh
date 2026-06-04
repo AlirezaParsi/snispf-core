@@ -24,9 +24,18 @@ echo "Generating default config for bundles..."
 go run ./cmd/snispf --generate-config "${DEFAULT_CONFIG_PATH}"
 
 echo "Building release matrix..."
-GOOS=windows GOARCH=amd64 go build -o "${RELEASE_DIR}/snispf_windows_amd64.exe" ./cmd/snispf
-GOOS=linux GOARCH=amd64 go build -o "${RELEASE_DIR}/snispf_linux_amd64" ./cmd/snispf
-GOOS=linux GOARCH=arm64 go build -o "${RELEASE_DIR}/snispf_linux_arm64" ./cmd/snispf
+VERSION="${VERSION:-}"
+if [[ -z "${VERSION}" ]]; then
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
+  else
+    VERSION="dev"
+  fi
+fi
+export VERSION
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o "${RELEASE_DIR}/snispf_windows_amd64.exe" ./cmd/snispf
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o "${RELEASE_DIR}/snispf_linux_amd64" ./cmd/snispf
+GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o "${RELEASE_DIR}/snispf_linux_arm64" ./cmd/snispf
 
 copy_windivert_if_present() {
 	local src="$1"
@@ -172,6 +181,7 @@ eval "${SHA_TOOL} ${ARTIFACTS[*]}" > checksums.txt
 
 python3 - <<'PY'
 import json
+import os
 import pathlib
 from datetime import datetime, timezone
 
@@ -191,6 +201,7 @@ for line in (release / "checksums.txt").read_text(encoding="utf-8").splitlines()
 
 manifest = {
     "project": "snispf-core",
+    "version": os.environ.get("VERSION", "dev"),
     "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "artifacts": entries,
 }

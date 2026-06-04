@@ -7,6 +7,17 @@ $releaseDir = Join-Path $repo "release"
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 $defaultConfigPath = Join-Path $releaseDir "default_config.json"
 
+$version = $env:VERSION
+if (-not $version) {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $version = (git describe --tags --always --dirty 2>$null)
+    }
+    if (-not $version) {
+        $version = "dev"
+    }
+}
+$env:VERSION = $version
+
 $windowsBundleDir = Join-Path $releaseDir "snispf_windows_amd64_bundle"
 $linuxAmd64BundleDir = Join-Path $releaseDir "snispf_linux_amd64_bundle"
 $linuxArm64BundleDir = Join-Path $releaseDir "snispf_linux_arm64_bundle"
@@ -31,7 +42,7 @@ foreach ($t in $targets) {
     Write-Host (" - {0}/{1} -> {2}" -f $t.GOOS, $t.GOARCH, $t.Out)
     $env:GOOS = $t.GOOS
     $env:GOARCH = $t.GOARCH
-    go build -o (Join-Path $releaseDir $t.Out) ./cmd/snispf
+    go build -ldflags "-X main.version=$version" -o (Join-Path $releaseDir $t.Out) ./cmd/snispf
 }
 
 function Find-WinDivertFile {
@@ -194,6 +205,7 @@ $hashEntries |
 $manifestPath = Join-Path $releaseDir "release_manifest.json"
 $manifest = [ordered]@{
     project          = "snispf-core"
+    version          = $version
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     artifacts        = $hashEntries
 }
