@@ -1,6 +1,14 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
 
+# Save absolute path of the script at start (before any cd)
+if [[ "$0" == /* ]]; then
+    SCRIPT_SOURCE="$0"
+else
+    SCRIPT_SOURCE="$(pwd)/$0"
+fi
+
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -179,7 +187,9 @@ download_binary() {
 copy_script_to_install_dir() {
     local script_path=""
 
-    if [ -f "$(pwd)/termux.sh" ]; then
+    if [ -f "$SCRIPT_SOURCE" ]; then
+        script_path="$SCRIPT_SOURCE"
+    elif [ -f "$(pwd)/termux.sh" ]; then
         script_path="$(pwd)/termux.sh"
     elif [ -f "$HOME/termux.sh" ]; then
         script_path="$HOME/termux.sh"
@@ -207,7 +217,7 @@ create_standalone_command() {
     
     if [ -n "$bin_path" ]; then
         cat > "$bin_path" << EOF
-#!/bin/bash
+#!$PREFIX/bin/bash
 exec $SCRIPT_FILE "\$@"
 EOF
         chmod +x "$bin_path"
@@ -288,6 +298,9 @@ run_snispf() {
         if [ "$EUID" -ne 0 ]; then
             print_msg "Root required. Executing with sudo..."
             exec sudo "$BINARY_FILE" --config "$CONFIG_FILE"
+        else
+            print_msg "Starting SNISPF with root..."
+            exec "$BINARY_FILE" --config "$CONFIG_FILE"
         fi
     else
         print_msg "Starting SNISPF (foreground mode)..."
@@ -305,7 +318,7 @@ stop_snispf() {
     print_msg "Stopping SNISPF..."
     
     if [ "$mode" = "wrong_seq" ]; then
-        local pids=$(sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
+        local pids=$(sudo pgrep -f "snispf" 2>/dev/null || sudo pidof snispf 2>/dev/null || sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
         if [ -n "$pids" ]; then
             for pid in $pids; do
                 sudo kill -9 "$pid" 2>/dev/null
@@ -315,7 +328,7 @@ stop_snispf() {
             print_warn "No running process found"
         fi
     else
-        local pids=$(ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
+        local pids=$(pgrep -f "snispf" 2>/dev/null || pidof snispf 2>/dev/null || ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}')
         if [ -n "$pids" ]; then
             for pid in $pids; do
                 kill -9 "$pid" 2>/dev/null
@@ -334,7 +347,7 @@ status_snispf() {
     local mode=$(get_current_mode)
     
     if [ "$mode" = "wrong_seq" ]; then
-        local pid=$(sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
+        local pid=$(sudo pgrep -f "snispf" 2>/dev/null | head -1 || sudo pidof snispf 2>/dev/null | head -1 || sudo ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
         
         if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
             print_msg "SNISPF is RUNNING (Root mode)"
@@ -346,7 +359,7 @@ status_snispf() {
         fi
     fi
     
-    local pid=$(ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
+    local pid=$(pgrep -f "snispf" 2>/dev/null | head -1 || pidof snispf 2>/dev/null | head -1 || ps -e -o pid,comm 2>/dev/null | grep -E "snispf$" | grep -v grep | awk '{print $1}' | head -1)
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         print_msg "SNISPF is RUNNING"
         echo "  PID: $pid"
