@@ -13,9 +13,18 @@ Write-Host "Running vet..."
 go vet ./...
 
 Write-Host "Building Windows amd64 core binary..."
+$version = $env:VERSION
+if (-not $version) {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $version = (git describe --tags --always --dirty 2>$null)
+    }
+    if (-not $version) {
+        $version = "dev"
+    }
+}
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
-go build -o (Join-Path $releaseDir "snispf_windows_amd64.exe") ./cmd/snispf
+go build -ldflags "-X main.version=$version" -o (Join-Path $releaseDir "snispf_windows_amd64.exe") ./cmd/snispf
 
 function Find-WinDivertFile {
 	param(
