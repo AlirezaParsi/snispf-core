@@ -46,6 +46,8 @@ jobs:
 
       - name: Build core artifacts
         run: bash ./scripts/build_release_matrix.sh
+        env:
+          VERSION: ${{ github.ref_name }}
 
       - name: Upload core artifacts
         uses: actions/upload-artifact@v4
@@ -70,6 +72,8 @@ jobs:
 
       - name: Build OpenWrt artifacts
         run: bash ./scripts/build_openwrt_matrix.sh
+        env:
+          VERSION: ${{ github.ref_name }}
 
       - name: Upload OpenWrt artifacts
         uses: actions/upload-artifact@v4
