@@ -17,11 +17,11 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Config
-INSTALL_DIR="$HOME/sni-spoof"
+INSTALL_DIR="$HOME/snispf"
 BINARY_URL="https://github.com/NaxonM/snispf-core/releases/download/v0.1.8/snispf_linux_arm64"
 CONFIG_FILE="$INSTALL_DIR/config.json"
 BINARY_FILE="$INSTALL_DIR/snispf"
-SCRIPT_FILE="$INSTALL_DIR/sni.sh"
+SCRIPT_FILE="$INSTALL_DIR/snispf.sh"
 
 print_msg() { echo -e "${GREEN}[+]${NC} $1"; }
 print_error() { echo -e "${RED}[!]${NC} $1"; }
@@ -189,10 +189,10 @@ copy_script_to_install_dir() {
 
     if [ -f "$SCRIPT_SOURCE" ]; then
         script_path="$SCRIPT_SOURCE"
-    elif [ -f "$(pwd)/termux.sh" ]; then
-        script_path="$(pwd)/termux.sh"
-    elif [ -f "$HOME/termux.sh" ]; then
-        script_path="$HOME/termux.sh"
+    elif [ -f "$(pwd)/termux_snispf.sh" ]; then
+        script_path="$(pwd)/termux_snispf.sh"
+    elif [ -f "$HOME/termux_snispf.sh" ]; then
+        script_path="$HOME/termux_snispf.sh"
     elif [ -f "$0" ]; then
         script_path="$0"
         if [[ "$script_path" != /* ]]; then
@@ -213,7 +213,7 @@ copy_script_to_install_dir() {
 
 # Create standalone command
 create_standalone_command() {
-    local bin_path="$PREFIX/bin/sni"
+    local bin_path="$PREFIX/bin/snispf"
     
     if [ -n "$bin_path" ]; then
         cat > "$bin_path" << EOF
@@ -221,7 +221,7 @@ create_standalone_command() {
 exec $SCRIPT_FILE "\$@"
 EOF
         chmod +x "$bin_path"
-        print_msg "Command created: sni"
+        print_msg "Command created: snispf"
     fi
 }
 
@@ -251,14 +251,15 @@ install_snispf() {
     print_info "Directory: $INSTALL_DIR"
     echo ""
     print_msg "Usage:"
-    echo "  sni run          # Start proxy (foreground)"
-    echo "  sni stop         # Stop proxy"
-    echo "  sni status       # Check status"
-    echo "  sni update       # Update binary"
+    echo "  snispf run          # Start proxy (foreground)"
+    echo "  snispf stop         # Stop proxy"
+    echo "  snispf status       # Check status"
+    echo "  snispf update       # Update binary"
+    echo "  snispf uninstall    # Uninstall SNISPF"
 
     if [ "$root_mode" = "--root" ]; then
         echo ""
-        print_info "Root mode: 'sni run' will auto-request root via sudo"
+        print_info "Root mode: 'snispf run' will auto-request root via sudo"
     fi
 }
 
@@ -282,13 +283,13 @@ run_snispf() {
     check_termux
     
     if [ ! -f "$BINARY_FILE" ]; then
-        print_error "SNISPF not installed. Run: sni --install"
+        print_error "SNISPF not installed. Run: snispf install"
         exit 1
     fi
     
     # Verify binary before running
     if ! file "$BINARY_FILE" 2>/dev/null | grep -q "ELF.*executable"; then
-        print_error "Binary is corrupted. Please run: sni update"
+        print_error "Binary is corrupted. Please run: snispf update"
         exit 1
     fi
 
@@ -375,11 +376,12 @@ show_help() {
     cat << EOF
 SNISPF Core Manager for Termux
 
-Usage: sni [COMMAND]
+Usage: snispf [COMMAND]
 
 Commands:
-  --install              Install (normal mode)
-  --install --root       Install (root mode)
+  install                Install (normal mode)
+  install --root         Install (root mode)
+  uninstall              Uninstall manager and binaries
   run                    Start proxy (foreground)
   stop                   Stop proxy
   status                 Show status
@@ -387,25 +389,44 @@ Commands:
   --help                 Show help
 
 Examples:
-  sni --install          # Normal install
-  sni --install --root   # Root install
-  sni run                # Start proxy
-  sni stop               # Stop proxy
-  sni status             # Check status
-  sni update             # Update to latest binary
+  snispf install         # Normal install
+  snispf install --root  # Root install
+  snispf run             # Start proxy
+  snispf stop            # Stop proxy
+  snispf status          # Check status
+  snispf update          # Update to latest binary
 
 Notes:
   - Termux only (Android)
-  - Config: ~/sni-spoof/config.json
-  - Root mode: 'sni run' auto-requests root via sudo
+  - Config: ~/snispf/config.json
+  - Root mode: 'snispf run' auto-requests root via sudo
   - Press Ctrl+C to stop the proxy
 EOF
 }
 
+# Uninstall function
+uninstall_snispf() {
+    check_termux
+    print_msg "Uninstalling SNISPF for Termux..."
+    local bin_path="$PREFIX/bin/snispf"
+    if [ -f "$bin_path" ]; then
+        rm -f "$bin_path"
+        print_msg "Shortcut command removed: snispf"
+    fi
+    if [ -d "$INSTALL_DIR" ]; then
+        rm -rf "$INSTALL_DIR"
+        print_msg "Installation directory removed: $INSTALL_DIR"
+    fi
+    print_msg "Uninstall complete!"
+}
+
 # Main
 case "$1" in
-    --install)
+    install|--install)
         install_snispf "$2"
+        ;;
+    uninstall)
+        uninstall_snispf
         ;;
     update)
         update_snispf

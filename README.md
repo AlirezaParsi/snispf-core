@@ -293,28 +293,29 @@ setcap cap_net_raw+ep /path/to/snispf
 
 ## Termux deployment (Android)
 
-SNISPF can be run inside Termux on Android ARM64 devices. A helper script is provided at `scripts/termux.sh`.
+SNISPF can be run inside Termux on Android ARM64 devices. A helper script is provided at `scripts/termux_snispf.sh`.
 
 ### Installation
 
 For root users (recommended for `wrong_seq` strategy):
 ```bash
-curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux.sh -o termux.sh && chmod +x termux.sh && bash termux.sh --install --root
+curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux_snispf.sh -o termux_snispf.sh && chmod +x termux_snispf.sh && bash termux_snispf.sh install --root
 ```
 
 For non-root users:
 ```bash
-curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux.sh -o termux.sh && chmod +x termux.sh && bash termux.sh --install
+curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux_snispf.sh -o termux_snispf.sh && chmod +x termux_snispf.sh && bash termux_snispf.sh install
 ```
 
 ### Usage
 
-Once installed, the manager creates a standalone `sni` shortcut command:
+Once installed, the manager creates a standalone `snispf` shortcut command:
 ```bash
-sni run          # Start proxy (foreground)
-sni stop         # Stop proxy
-sni status       # Check status
-sni update       # Update binary
+snispf run          # Start proxy (foreground)
+snispf stop         # Stop proxy
+snispf status       # Check status
+snispf update       # Update binary
+snispf uninstall    # Uninstall manager and binaries
 ```
 
 ---
