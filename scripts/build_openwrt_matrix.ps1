@@ -50,6 +50,17 @@ Write-Host "Running vet..."
 Invoke-Go -Arguments @("vet", "./...") -What "vet ./..."
 
 $defaultConfigPath = Join-Path $outDir "openwrt_default_config.json"
+
+$version = $env:VERSION
+if (-not $version) {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $version = (git describe --tags --always --dirty 2>$null)
+    }
+    if (-not $version) {
+        $version = "dev"
+    }
+}
+$env:VERSION = $version
 Write-Host "Generating default OpenWrt config..."
 Invoke-Go -Arguments @("run", "./cmd/snispf", "--generate-config", $defaultConfigPath) -What "run generate-config"
 
@@ -77,7 +88,7 @@ $targets = @(
     @{ GOOS = "linux"; GOARCH = "amd64"; Out = "snispf_openwrt_x86_64" }
 )
 
-$ldflags = "-s -w -buildid="
+$ldflags = "-s -w -buildid= -X main.version=$version"
 
 Write-Host "Building OpenWrt matrix..."
 foreach ($t in $targets) {
@@ -173,6 +184,7 @@ $hashEntries |
 $manifestPath = Join-Path $outDir "release_manifest.json"
 $manifest = [ordered]@{
     project          = "snispf-core-openwrt"
+    version          = $version
     generated_at_utc = (Get-Date).ToUniversalTime().ToString("o")
     artifacts        = $hashEntries
 }

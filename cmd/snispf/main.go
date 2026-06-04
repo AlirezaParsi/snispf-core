@@ -24,7 +24,7 @@ import (
 	"snispf/internal/tlsutil"
 )
 
-const version = "1.1.0-go"
+var version = "1.1.0-go"
 const apiVersion = "v1"
 
 const banner = `

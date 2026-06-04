@@ -10,6 +10,16 @@ OUT_DIR="${REPO_ROOT}/release/openwrt"
 mkdir -p "${OUT_DIR}"
 DEFAULT_CONFIG_PATH="${OUT_DIR}/openwrt_default_config.json"
 
+VERSION="${VERSION:-}"
+if [[ -z "${VERSION}" ]]; then
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
+  else
+    VERSION="dev"
+  fi
+fi
+export VERSION
+
 # Ensure host tests/vet are not affected by caller-provided cross-compile env vars.
 unset GOOS GOARCH GOARM GOMIPS CGO_ENABLED
 
@@ -50,7 +60,7 @@ build_one() {
     env_vars+=("GOMIPS=${gomips}")
   fi
 
-  env "${env_vars[@]}" go build -trimpath -ldflags "-s -w -buildid=" -o "${OUT_DIR}/${out}" ./cmd/snispf
+  env "${env_vars[@]}" go build -trimpath -ldflags "-s -w -buildid= -X main.version=${VERSION}" -o "${OUT_DIR}/${out}" ./cmd/snispf
 }
 
 echo "Building OpenWrt matrix..."
@@ -134,6 +144,7 @@ sha256sum "${artifacts[@]}" > checksums.txt
 
 python3 - <<'PY'
 import json
+import os
 import pathlib
 from datetime import datetime, timezone
 
@@ -153,6 +164,7 @@ for line in (release / "checksums.txt").read_text(encoding="utf-8").splitlines()
 
 manifest = {
     "project": "snispf-core-openwrt",
+    "version": os.environ.get("VERSION", "dev"),
     "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "artifacts": entries,
 }

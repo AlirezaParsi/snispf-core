@@ -351,6 +351,50 @@ setcap cap_net_raw+ep /path/to/snispf
 
 ---
 
+## استقرار روی Termux (اندروید)
+
+امکان اجرای SNISPF در Termux روی دستگاه‌های اندرویدی ARM64 وجود دارد. یک اسکریپت کمکی در مسیر `scripts/termux_snispf.sh` قرار گرفته است.
+
+### نصب
+
+برای کاربران با دسترسی روت (توصیه‌شده برای استراتژی `wrong_seq`):
+
+</div>
+
+```bash
+curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux_snispf.sh -o termux_snispf.sh && chmod +x termux_snispf.sh && bash termux_snispf.sh install --root
+```
+
+<div dir="rtl">
+
+برای کاربران بدون دسترسی روت:
+
+</div>
+
+```bash
+curl -s https://raw.githubusercontent.com/NaxonM/snispf-core/refs/heads/dev/scripts/termux_snispf.sh -o termux_snispf.sh && chmod +x termux_snispf.sh && bash termux_snispf.sh install
+```
+
+<div dir="rtl">
+
+### نحوه استفاده
+
+پس از نصب، یک دستور میانبر `snispf` در محیط ترمینال ایجاد می‌شود:
+
+</div>
+
+```bash
+snispf run          # شروع پروکسی (اجرا در پیش‌زمینه)
+snispf stop         # توقف پروکسی
+snispf status       # بررسی وضعیت
+snispf update       # آپدیت فایل باینری
+snispf uninstall    # حذف پروکسی و فایل‌های مرتبط
+```
+
+<div dir="rtl">
+
+---
+
 ## ساخت و انتشار
 
 ### ساخت محلی
